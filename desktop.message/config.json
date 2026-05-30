@@ -1,0 +1,12 @@
+{
+    "tile":       "~/tile.png",
+    "width":      1920,
+    "height":     1200,
+    "message":    "actual message here",
+    "font.name":  "Calibri",
+    "font.size":  36,
+    "font.color": "#f0f0f0",
+    "margin":     36,
+    "placement":  "bottom, right",
+    "output":     "~/wallpaper.png"
+}
