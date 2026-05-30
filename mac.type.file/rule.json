@@ -1,0 +1,20 @@
+{
+  "description": "Right Shift+F2 → type snippet",
+  "manipulators": [
+    {
+      "type": "basic",
+      "from": {
+        "key_code": "f2",
+        "modifiers": {
+          "mandatory": ["right_shift"],
+          "optional": []
+        }
+      },
+      "to": [
+        {
+          "shell_command": "/usr/local/bin/typefile -delay 0s /full/path/snippets/f2.txt"
+        }
+      ]
+    }
+  ]
+}
