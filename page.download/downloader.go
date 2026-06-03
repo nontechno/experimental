@@ -18,6 +18,10 @@ import (
 // Return true to download, false to skip.
 type FilterFunc func(href string) bool
 
+var (
+	dryrun = false
+)
+
 // Downloader holds shared config.
 type Downloader struct {
 	client *http.Client
@@ -94,6 +98,11 @@ func (d *Downloader) fetch(rawURL string) (io.ReadCloser, error) {
 // download fetches rawURL and writes its binary content to outDir,
 // using the last path segment as the filename.
 func (d *Downloader) download(rawURL string) error {
+	if dryrun {
+		fmt.Fprintf(os.Stdout, "[%s]\n", rawURL)
+		return nil
+	}
+
 	body, err := d.fetch(rawURL)
 	if err != nil {
 		return fmt.Errorf("fetch: %w", err)
@@ -186,6 +195,12 @@ func main() {
 		os.Exit(1)
 	}
 	targetURL := os.Args[1]
+
+	for _, entry := range os.Args[2:] {
+		if strings.HasPrefix(entry, "-dry") || strings.HasPrefix(entry, "/dry") {
+			dryrun = true
+		}
+	}
 
 	originalHost := ""
 	if u, err := url.Parse(targetURL); err != nil {
