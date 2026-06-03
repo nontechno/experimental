@@ -72,12 +72,12 @@ func main() {
 func convertJSONC(src []byte) ([]byte, error) {
 	type state int
 	const (
-		stNormal      state = iota
-		stString            // inside "..."
-		stStringEsc         // inside string, after backslash
-		stLineComment       // after //
-		stBlockComment      // after /*
-		stBlockCommentStar  // after /* ... *
+		stNormal           state = iota
+		stString                 // inside "..."
+		stStringEsc              // inside string, after backslash
+		stLineComment            // after //
+		stBlockComment           // after /*
+		stBlockCommentStar       // after /* ... *
 	)
 
 	out := make([]byte, 0, len(src))
@@ -170,7 +170,7 @@ func stripTrailingCommas(src []byte) []byte {
 
 	type state int
 	const (
-		stNormal    state = iota
+		stNormal state = iota
 		stString
 		stStringEsc
 	)

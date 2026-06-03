@@ -325,9 +325,9 @@ func invert256(n int) int {
 		return n
 	}
 	switch {
-	case n < 8:   // standard colors  → bright equivalents
+	case n < 8: // standard colors  → bright equivalents
 		return n + 8
-	case n < 16:  // bright colors    → standard equivalents
+	case n < 16: // bright colors    → standard equivalents
 		return n - 8
 	case n < 232: // 6×6×6 color cube: invert each component
 		idx := n - 16
@@ -335,7 +335,7 @@ func invert256(n int) int {
 		g := (idx / 6) % 6
 		r := idx / 36
 		return 16 + 36*(5-r) + 6*(5-g) + (5 - b)
-	default:      // grayscale ramp (232-255): mirror within the ramp
+	default: // grayscale ramp (232-255): mirror within the ramp
 		return 487 - n
 	}
 }
@@ -487,5 +487,5 @@ Examples:
 // repeatFlag collects multiple -m flags.
 type repeatFlag struct{ vals []string }
 
-func (f *repeatFlag) String() string        { return strings.Join(f.vals, ",") }
-func (f *repeatFlag) Set(v string) error    { f.vals = append(f.vals, v); return nil }
+func (f *repeatFlag) String() string     { return strings.Join(f.vals, ",") }
+func (f *repeatFlag) Set(v string) error { f.vals = append(f.vals, v); return nil }
