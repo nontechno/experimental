@@ -59,8 +59,13 @@ func (h *Holder) print() {
 }
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: acronyms <file>")
+		return
+	}
+
 	// 1. Open the file
-	file, err := os.Open(source)
+	file, err := os.Open(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
 	}
