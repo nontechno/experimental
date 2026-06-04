@@ -1,0 +1,19 @@
+{
+	"code": {
+		"app": "/Applications/Visual Studio Code.app",
+		"args": [
+			"--wait"
+		]
+	},
+	"csv": "/Applications/Numbers.app",
+	"go": "/Applications/GoLand.app",
+	"java": "/Applications/IntelliJ IDEA.app",
+	"js": "/Applications/WebStorm.app",
+	"md": "/Applications/Obsidian.app",
+	"pdf": "/System/Applications/Preview.app",
+	"py": "/Applications/PyCharm.app",
+	"rs": "/Applications/RustRover.app",
+	"ts": "/Applications/WebStorm.app",
+	"txt": "/Applications/Sublime Text.app",
+	"xcode": "/Applications/Xcode.app"
+}
