@@ -30,10 +30,10 @@ func generateKey(keysize int) error {
 	return nil
 }
 func keyGenProc(results chan string) {
-	if took, err := generate(bits, runs); err != nil {
+	if average, minimum, maximum, err := generate(bits, runs); err != nil {
 		results <- fmt.Sprintf("error: %v", err)
 	} else {
-		results <- fmt.Sprintf("rsa.%v: Took %v microseconds per key (over course of %v runs)", bits, formatWithCommas(took), runs)
+		results <- fmt.Sprintf("rsa.%v: Took %v microseconds per key (%v runs; min: %v; max: %v)", bits, formatWithCommas(average), runs, formatWithCommas(minimum), formatWithCommas(maximum))
 	}
 }
 
@@ -49,17 +49,28 @@ func main() {
 	multiCore(keyGenProc)
 }
 
-func generate(keysize, runs int) (uint64, error) {
+func generate(keysize, runs int) (uint64, uint64, uint64, error) {
 	start := time.Now()
+	minimumMicroseconds := int64(0)
+	maximumMicroseconds := int64(0)
+
 	for i := 0; i < runs; i++ {
+		pass := time.Now()
 		if err := generateKey(keysize); err != nil {
 			fmt.Println(err)
-			return 0, err
+			return 0, 0, 0, err
+		}
+		passMicroseconds := time.Since(pass).Microseconds()
+		if passMicroseconds < minimumMicroseconds || minimumMicroseconds == 0 {
+			minimumMicroseconds = passMicroseconds
+		}
+		if passMicroseconds > maximumMicroseconds {
+			maximumMicroseconds = passMicroseconds
 		}
 	}
 	tookMicroseconds := time.Since(start).Microseconds()
 	rate := float64(tookMicroseconds) / float64(runs)
-	return uint64(rate), nil
+	return uint64(rate), uint64(minimumMicroseconds), uint64(maximumMicroseconds), nil
 }
 
 // formatWithCommas formats an integer to a string with comma delimiters
