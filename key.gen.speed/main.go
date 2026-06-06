@@ -158,4 +158,9 @@ func readArguments() {
 			os.Exit(7)
 		}
 	}
+
+	available := runtime.NumCPU()
+	if cores > available {
+		cores = available
+	}
 }
