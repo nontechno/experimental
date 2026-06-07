@@ -13,6 +13,10 @@ func main() {
 		return
 	}
 
+	// test := "Continuous Delivery � Continuous Deployment ;  Continuous Delivery � Continuous Deployment"
+	// getValues(test)
+
+	loadConfig()
 	store := Holder{make(map[string]Entry)}
 
 	for _, arg := range os.Args[1:] {

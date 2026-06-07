@@ -59,15 +59,42 @@ func trim(original string) string {
 func getExclusionList() map[string]bool {
 	exclusionList := make(map[string]bool)
 
-	if raw, err := os.ReadFile("./exclusions"); err == nil {
-		lines := strings.Split(string(raw), "\n")
-		for _, line := range lines {
-			line = strings.ToLower(trim(line))
-			if len(line) > 0 {
-				exclusionList[line] = true
+	exclusionsFileName := configGet("exclusions")
+	if len(exclusionsFileName) > 0 {
+		if raw, err := os.ReadFile(exclusionsFileName); err == nil {
+			lines := strings.Split(string(raw), "\n")
+			for _, line := range lines {
+				line = strings.ToLower(trim(line))
+				if len(line) > 0 {
+					exclusionList[line] = true
+				}
 			}
 		}
 	}
 
 	return exclusionList
+}
+
+func isAlphanumericUnicode(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isAlphanumericOrSpace(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != ' ' && r != '-' && r != '\'' {
+			return false
+		}
+	}
+	return true
 }

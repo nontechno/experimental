@@ -1,0 +1,11 @@
+exclusions:
+	./exclusions
+prefix:
+	# here is what we know
+
+	| term | meaning |
+	|------|---------|
+
+suffix:
+
+	(this is all)

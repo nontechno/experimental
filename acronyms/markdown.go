@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"strings"
 )
@@ -70,11 +69,10 @@ func loadMarkdown(fileName string, store *Holder) (bool, error) {
 }
 
 func getValues(original string) []string {
-	const separator = " · "
 	const comma = "; "
 	values := []string{}
 
-	unified := strings.Replace(original, separator, comma, -1)
+	unified := unifySeparators(original)
 	for _, entry := range strings.Split(unified, comma) {
 		trimmed := trim(entry)
 		if len(trimmed) > 0 {
@@ -85,15 +83,20 @@ func getValues(original string) []string {
 	return values
 }
 
-func md_test() {
-	store := Holder{make(map[string]Entry)}
-	if _, err := loadMarkdown(".test/acronyms.md", &store); err != nil {
-		fmt.Println(err)
-		return
+func unifySeparators(original string) string {
+	const separator = " · "
+	const comma = "; "
+
+	unified := strings.Replace(original, separator, comma, -1)
+	unified = strings.Replace(unified, " � ", comma, -1)
+
+	data := []rune(unified)
+	for index, r := range data {
+		if r == 65533 {
+			data[index] = ';'
+		}
 	}
-	if _, err := loadMarkdown(".test/acronyms2.md", &store); err != nil {
-		fmt.Println(err)
-		return
-	}
-	store.print()
+	unified = string(data)
+
+	return unified
 }

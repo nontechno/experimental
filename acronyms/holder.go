@@ -35,6 +35,11 @@ func (h *Holder) add(key, val string) {
 		}
 
 		if !alreadyKnown {
+			if !isAlphanumericOrSpace(val) {
+				isAlphanumericOrSpace(val)
+				fmt.Printf("%s is not alphanumeric", val)
+			}
+
 			already.Values = append(already.Values, val)
 		}
 	}
@@ -60,10 +65,14 @@ func (h *Holder) print() {
 	}
 
 	format := fmt.Sprintf("| %%-%vs | %%s |\n", maxKeyLen)
+	prefix := configGet("prefix")
+	suffix := configGet("suffix")
 
+	fmt.Printf("%s", prefix)
 	for _, key := range sortedKeys {
 		entry := h.data[key]
 		right := strings.Join(entry.Values, "; ")
 		fmt.Printf(format, entry.OriginalKey, right)
 	}
+	fmt.Printf("%s", suffix)
 }
