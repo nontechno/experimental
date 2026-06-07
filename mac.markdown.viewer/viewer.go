@@ -271,7 +271,7 @@ func main() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "mdview-helper error:", err)
 		os.Exit(1)
 	}
