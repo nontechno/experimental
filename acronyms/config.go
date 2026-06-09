@@ -5,12 +5,9 @@ import (
 	"strings"
 )
 
-const (
-	configFileName = "./config"
-)
-
 var (
-	config = map[string][]string{}
+	configFileName = "./config"
+	config         = map[string][]string{}
 )
 
 func loadConfig() {

@@ -16,10 +16,11 @@ func main() {
 	// test := "Continuous Delivery � Continuous Deployment ;  Continuous Delivery � Continuous Deployment"
 	// getValues(test)
 
+	list := getListOfFiles()
 	loadConfig()
-	store := Holder{make(map[string]Entry)}
 
-	for _, arg := range os.Args[1:] {
+	store := Holder{make(map[string]Entry)}
+	for _, arg := range list {
 		if strings.HasSuffix(strings.ToLower(arg), ".md") {
 			if _, err := loadMarkdown(arg, &store); err != nil {
 				fmt.Printf("failed to proccess [%s]: due to: %v\n", arg, err)
@@ -34,6 +35,48 @@ func main() {
 	}
 
 	store.print()
+}
+
+func getListOfFiles() []string {
+	listOfFiles := make([]string, 0)
+	index := 1
+	for index < len(os.Args) {
+		arg := os.Args[index]
+		if strings.HasPrefix(arg, "-") {
+			switch arg {
+			case "-config":
+				if (index + 1) < len(os.Args) {
+					configFileName = os.Args[index+1]
+				} else {
+					failure("config file not found")
+				}
+				
+			case "-md", "-html":
+				//reserved for future use
+				break
+
+			default:
+				failure("unknown argument [%s]", arg)
+			}
+			// it is a param: skip it and (maybe) next one
+			index++
+		} else if strings.HasSuffix(strings.ToLower(arg), ".acronyms") {
+			if raw, err := os.ReadFile(arg); err == nil {
+				lines := strings.Split(string(raw), "\n")
+				for _, line := range lines {
+					if line = strings.Trim(line, " \t\r"); len(line) > 0 {
+						listOfFiles = append(listOfFiles, line)
+					}
+				}
+			} else {
+				failure("failed to read [%s]: %v\n", arg, err)
+			}
+		} else if len(arg) > 0 {
+			listOfFiles = append(listOfFiles, arg)
+		}
+		index++
+	}
+	return listOfFiles
 }
 
 func processPlain(filename string, store *Holder) error {
@@ -80,4 +123,9 @@ func processPlain(filename string, store *Holder) error {
 		fmt.Printf("\ndiscarded %v entries: [%v]\n", len(discarded), strings.Join(discarded, "; "))
 	}
 	return nil
+}
+
+func failure(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, format, args...)
+	os.Exit(7)
 }
