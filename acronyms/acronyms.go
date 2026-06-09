@@ -120,7 +120,7 @@ func processPlain(filename string, store *Holder) error {
 		return err
 	}
 	if len(discarded) > 0 {
-		fmt.Printf("\ndiscarded %v entries: [%v]\n", len(discarded), strings.Join(discarded, "; "))
+		// fmt.Printf("\ndiscarded %v entries: [%v]\n", len(discarded), strings.Join(discarded, "; "))
 	}
 	return nil
 }
