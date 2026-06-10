@@ -36,8 +36,7 @@ func (h *Holder) add(key, val string) {
 
 		if !alreadyKnown {
 			if !isAlphanumericOrSpace(val) {
-				isAlphanumericOrSpace(val)
-				fmt.Printf("%s is not alphanumeric", val)
+				// fmt.Fprintf(os.Stderr, "[%s] is not alphanumeric\n", val)
 			}
 
 			already.Values = append(already.Values, val)
