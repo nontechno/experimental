@@ -13,9 +13,6 @@ func main() {
 		return
 	}
 
-	// test := "Continuous Delivery � Continuous Deployment ;  Continuous Delivery � Continuous Deployment"
-	// getValues(test)
-
 	list := getListOfFiles()
 	loadConfig()
 
@@ -50,7 +47,7 @@ func getListOfFiles() []string {
 				} else {
 					failure("config file not found")
 				}
-				
+
 			case "-md", "-html":
 				//reserved for future use
 				break

@@ -50,7 +50,7 @@ func isSectionHead(original string) (bool, string) {
 	parts := strings.Split(trim(original), ":")
 	if len(parts) > 1 {
 		section := parts[0]
-		if len(section) > 0 && len(section) < 32 && isAlphanumericUnicode(section) {
+		if len(section) > 0 && len(section) < 32 && isAlphanumericOrDot(section) {
 			return true, strings.ToLower(section)
 		}
 	}
@@ -59,6 +59,9 @@ func isSectionHead(original string) (bool, string) {
 
 func configGet(key string) string {
 	if value, found := config[strings.ToLower(trim(key))]; found && len(value) > 0 {
+		if len(value) == 1 {
+			return trim(value[0])
+		}
 		return strings.Join(value, "\n")
 	}
 	return ""

@@ -59,7 +59,7 @@ func trim(original string) string {
 func getExclusionList() map[string]bool {
 	exclusionList := make(map[string]bool)
 
-	exclusionsFileName := configGet("exclusions")
+	exclusionsFileName := trim(configGet("exclusions"))
 	if len(exclusionsFileName) > 0 {
 		if raw, err := os.ReadFile(exclusionsFileName); err == nil {
 			lines := strings.Split(string(raw), "\n")
@@ -73,6 +73,27 @@ func getExclusionList() map[string]bool {
 	}
 
 	return exclusionList
+}
+
+func getHiglightList() []string {
+	highlightsList := []string{}
+
+	highlightsFileName := trim(configGet("highlights"))
+	if len(highlightsFileName) > 0 {
+		if raw, err := os.ReadFile(highlightsFileName); err == nil {
+			lines := strings.Split(string(raw), "\n")
+			for _, line := range lines {
+				line = strings.ToLower(trim(line))
+				if len(line) > 0 {
+					highlightsList = append(highlightsList, line)
+				}
+			}
+		} else {
+			failure("error: failed to open file [%s]: %v", highlightsFileName, err)
+		}
+	}
+
+	return highlightsList
 }
 
 func isAlphanumericUnicode(s string) bool {
@@ -93,6 +114,18 @@ func isAlphanumericOrSpace(s string) bool {
 	}
 	for _, r := range s {
 		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != ' ' && r != '-' && r != '\'' {
+			return false
+		}
+	}
+	return true
+}
+
+func isAlphanumericOrDot(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '.' {
 			return false
 		}
 	}

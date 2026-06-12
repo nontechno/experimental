@@ -19,6 +19,7 @@ type (
 )
 
 func (h *Holder) add(key, val string) {
+	key = strings.Trim(key, " \t:-")
 	normalized := strings.ToLower(key)
 	already, found := h.data[normalized]
 	if !found {
@@ -63,6 +64,18 @@ func (h *Holder) print() {
 		}
 	}
 
+	transform := func(original string) string {
+		return original
+	}
+	if list := getHiglightList(); len(list) > 0 {
+		pattern := HighlightPattern(list)
+		hprefix := configGet("highlight.prefix")
+		hsuffix := configGet("highlight.suffix")
+		transform = func(original string) string {
+			return Highlight(original, pattern, hprefix, hsuffix)
+		}
+	}
+
 	format := fmt.Sprintf("| %%-%vs | %%s |\n", maxKeyLen)
 	prefix := configGet("prefix")
 	suffix := configGet("suffix")
@@ -71,6 +84,10 @@ func (h *Holder) print() {
 	for _, key := range sortedKeys {
 		entry := h.data[key]
 		right := strings.Join(entry.Values, "; ")
+
+		// right = Highlight(right, []string{"service"}, "**", "**")
+		right = transform(right)
+
 		fmt.Printf(format, entry.OriginalKey, right)
 	}
 	fmt.Printf("%s", suffix)

@@ -9,3 +9,9 @@ prefix:
 suffix:
 
 	(this is all)
+highlight.prefix:
+    **
+highlight.suffix:
+    **
+highlights:
+    ./highlights
