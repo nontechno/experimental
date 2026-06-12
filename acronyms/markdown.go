@@ -27,6 +27,7 @@ func loadMarkdown(fileName string, store *Holder) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	trace("opened file [%s]", fileName)
 	defer file.Close()
 
 	// 3. Create a scanner for the file

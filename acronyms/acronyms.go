@@ -13,8 +13,8 @@ func main() {
 		return
 	}
 
-	list := getListOfFiles()
 	loadConfig()
+	list := getListOfFiles()
 
 	store := Holder{make(map[string]Entry)}
 	for _, arg := range list {
@@ -44,6 +44,7 @@ func getListOfFiles() []string {
 			case "-config":
 				if (index + 1) < len(os.Args) {
 					configFileName = os.Args[index+1]
+					loadConfig()
 				} else {
 					failure("config file not found")
 				}
@@ -59,6 +60,7 @@ func getListOfFiles() []string {
 			index++
 		} else if strings.HasSuffix(strings.ToLower(arg), ".acronyms") {
 			if raw, err := os.ReadFile(arg); err == nil {
+				trace("opened file [%s]", arg)
 				lines := strings.Split(string(raw), "\n")
 				for _, line := range lines {
 					if line = strings.Trim(line, " \t\r"); len(line) > 0 {
@@ -82,6 +84,8 @@ func processPlain(filename string, store *Holder) error {
 	if err != nil {
 		return err
 	}
+	trace("opened file [%s]", filename)
+
 	// 2. Ensure the file is closed when the function finishes
 	defer file.Close()
 

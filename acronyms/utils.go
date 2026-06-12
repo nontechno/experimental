@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"unicode"
@@ -62,6 +63,7 @@ func getExclusionList() map[string]bool {
 	exclusionsFileName := trim(configGet("exclusions"))
 	if len(exclusionsFileName) > 0 {
 		if raw, err := os.ReadFile(exclusionsFileName); err == nil {
+			trace("opened file [%s]", exclusionsFileName)
 			lines := strings.Split(string(raw), "\n")
 			for _, line := range lines {
 				line = strings.ToLower(trim(line))
@@ -81,6 +83,7 @@ func getHiglightList() []string {
 	highlightsFileName := trim(configGet("highlights"))
 	if len(highlightsFileName) > 0 {
 		if raw, err := os.ReadFile(highlightsFileName); err == nil {
+			trace("opened file [%s]", highlightsFileName)
 			lines := strings.Split(string(raw), "\n")
 			for _, line := range lines {
 				line = strings.ToLower(trim(line))
@@ -130,4 +133,17 @@ func isAlphanumericOrDot(s string) bool {
 		}
 	}
 	return true
+}
+
+func isTraceEnabled() bool {
+	if txt := configGet("trace"); len(txt) > 0 {
+		return txt == "true" || txt == "enable" || txt == "yes"
+	}
+	return false
+}
+
+func trace(format string, args ...interface{}) {
+	if isTraceEnabled() {
+		fmt.Fprintf(os.Stderr, "trace: "+format+"\n", args...)
+	}
 }

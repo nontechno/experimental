@@ -15,6 +15,10 @@ func loadConfig() {
 	if err != nil {
 		return
 	}
+	// trace("opened file [%s]", configFileName)
+
+	// reset config
+	config = map[string][]string{}
 
 	lines := strings.Split(string(raw), "\n")
 	section := ""
