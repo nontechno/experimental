@@ -1,0 +1,1 @@
+CTE	Common Table Expression (a named subquery you can reference in the main query)
