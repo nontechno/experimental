@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # Finds files matching a wildcard pattern in the current directory and runs a
-# script for each match, passing the filename with its extension stripped.
+# script for each match, passing the filename broken into components.
 #
 # Usage: $0 [-r] <wildcard> <script>
 #
@@ -13,14 +14,14 @@
 #               Quote the pattern to prevent shell expansion.
 #
 #   <script>    Path to the script to invoke for each matched file.
-#               It receives one argument: the matched file's path with the
-#               last extension removed (e.g. 'subdir/foo.bar' for 'subdir/foo.bar.mmd').
+#               Receives three arguments:
+#                 -n <name>  filename without extension and without directory
+#                 -d <dir>   relative subdirectory path (empty string if none)
+#                 -e <ext>   the stripped extension (without leading dot)
 #
 # Examples:
 #   $0 '*.mmd' ./render.sh
 #   $0 -r '*.mmd' ./render.sh
-
-set -euo pipefail
 
 usage() {
     echo "Usage: $0 [-r] <wildcard> <script>" >&2
@@ -49,10 +50,19 @@ else
     maxdepth_arg=(-maxdepth 1)
 fi
 
-find . "${maxdepth_arg[@]}" -name "$pattern" -type f | while read -r file; do
+while IFS= read -r -d '' file; do
     # strip leading "./"
     rel="${file#./}"
-    # strip last extension
-    stem="${rel%.*}"
-    "$script" "$stem"
-done
+
+    # split into directory and base filename
+    dir="${rel%/*}"
+    base="${rel##*/}"
+    [[ "$dir" == "$base" ]] && dir=""   # no subdirectory
+
+    # split base into stem and extension
+    ext="${base##*.}"
+    stem="${base%.*}"
+    [[ "$ext" == "$base" ]] && ext=""   # no extension
+
+    "$script" -n "$stem" -d "$dir" -e "$ext"
+done < <(find . "${maxdepth_arg[@]}" -name "$pattern" -type f -print0)
