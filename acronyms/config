@@ -1,0 +1,19 @@
+exclusions:
+	./exclusions
+prefix:
+	# here is what we know
+
+	| term | meaning |
+	|------|---------|
+
+suffix:
+
+	(this is all)
+highlight.prefix:
+    **
+highlight.suffix:
+    **
+highlights:
+	./highlights
+trace:
+	yes

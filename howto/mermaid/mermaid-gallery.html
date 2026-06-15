@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mermaid Diagram Gallery</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #21262d;
+    --accent:   #58a6ff;
+    --accent2:  #3fb950;
+    --text:     #e6edf3;
+    --muted:    #7d8590;
+    --tag-bg:   #1f2937;
+    --mono:     'JetBrains Mono', 'Fira Code', monospace;
+    --sans:     'Inter', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    padding: 48px 40px 32px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-end;
+    gap: 24px;
+  }
+  .header-left { flex: 1; }
+  header h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: var(--text);
+    line-height: 1;
+  }
+  header h1 span { color: var(--accent); }
+  header p {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+  .count-badge {
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+
+  /* ── Nav pills ── */
+  nav {
+    padding: 16px 40px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 100;
+  }
+  nav a {
+    text-decoration: none;
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    transition: all 0.15s;
+    font-family: var(--mono);
+  }
+  nav a:hover { color: var(--text); border-color: var(--accent); }
+
+  /* ── Grid ── */
+  main {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(600px, 1fr));
+    gap: 1px;
+    background: var(--border);
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    padding: 28px 28px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 380px;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .card h2 {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+  .card-tag {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--muted);
+    background: var(--tag-bg);
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  /* ── Diagram area ── */
+  .diagram-wrap {
+    flex: 1;
+    background: #fff;
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    min-height: 260px;
+  }
+  .diagram-wrap svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Error state */
+  .diagram-error {
+    color: #f85149;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    text-align: center;
+    padding: 16px;
+  }
+
+  /* Loading */
+  .diagram-loading {
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-family: var(--mono);
+  }
+
+  /* ── Full-width cards ── */
+  .card.wide {
+    grid-column: 1 / -1;
+  }
+
+  /* ── Footer ── */
+  footer {
+    padding: 24px 40px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-family: var(--mono);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <h1>Mermaid <span>Diagram</span> Gallery</h1>
+    <p>All major diagram types — live rendered</p>
+  </div>
+  <span class="count-badge">13 types</span>
+</header>
+
+<nav id="nav"></nav>
+
+<main id="gallery"></main>
+
+<footer>mermaid@10.9 · rendered in-browser</footer>
+
+<script>
+const diagrams = [
+  {
+    id: "flowchart",
+    title: "Flowchart",
+    tag: "flowchart",
+    icon: "⬡",
+    iconBg: "#1c2a3a",
+    code: `flowchart TD
+    A([Start]) --> B{Auth token present?}
+    B -- No --> C[Redirect to login]
+    C --> D[User submits credentials]
+    D --> E{Valid?}
+    E -- No --> F[Show error] --> D
+    E -- Yes --> G[Issue JWT]
+    B -- Yes --> H{Token expired?}
+    H -- Yes --> I[Refresh token]
+    I --> J{Refresh valid?}
+    J -- No --> C
+    J -- Yes --> G
+    H -- No --> G
+    G --> K([Proceed to app])`
+  },
+  {
+    id: "sequence",
+    title: "Sequence Diagram",
+    tag: "sequenceDiagram",
+    icon: "↔",
+    iconBg: "#1a2e1a",
+    code: `sequenceDiagram
+    actor User
+    participant API
+    participant Auth
+    participant DB
+    User->>API: POST /login {user, pass}
+    API->>Auth: ValidateCredentials()
+    Auth->>DB: SELECT * FROM users
+    DB-->>Auth: UserRecord
+    Auth-->>API: {valid: true, userID: 42}
+    API->>Auth: GenerateJWT(userID=42)
+    Auth-->>API: signed_token
+    API-->>User: 200 OK {token}
+    User->>API: GET /data (Bearer token)
+    API->>Auth: VerifyJWT(token)
+    alt Token valid
+        Auth-->>API: {userID: 42}
+        API->>DB: SELECT * FROM data
+        DB-->>API: rows
+        API-->>User: 200 OK {data}
+    else Token expired
+        Auth-->>API: ErrExpired
+        API-->>User: 401 Unauthorized
+    end`
+  },
+  {
+    id: "class",
+    title: "Class Diagram",
+    tag: "classDiagram",
+    icon: "◫",
+    iconBg: "#2a1a2e",
+    code: `classDiagram
+    class Animal {
+        +String name
+        +int age
+        +speak() string
+        +move() void
+    }
+    class Dog {
+        +String breed
+        +speak() string
+        +fetch() void
+    }
+    class Cat {
+        +bool indoor
+        +speak() string
+        +purr() void
+    }
+    class Owner {
+        +String name
+        +List~Animal~ pets
+        +adopt(Animal) void
+    }
+    Animal <|-- Dog
+    Animal <|-- Cat
+    Owner "1" --> "0..*" Animal : owns`
+  },
+  {
+    id: "state",
+    title: "State Diagram",
+    tag: "stateDiagram-v2",
+    icon: "○",
+    iconBg: "#2a1f1a",
+    code: `stateDiagram-v2
+    [*] --> Idle
+    Idle --> Connecting : connect()
+    Connecting --> Connected : handshake OK
+    Connecting --> Error : timeout
+    Connected --> Authenticated : auth success
+    Connected --> Error : auth fail
+    Authenticated --> Processing : request received
+    Processing --> Authenticated : response sent
+    Processing --> Error : handler panic
+    Error --> Idle : reset()
+    Authenticated --> Idle : disconnect()
+    state Processing {
+        [*] --> Parsing
+        Parsing --> Executing
+        Executing --> Serializing
+        Serializing --> [*]
+    }`
+  },
+  {
+    id: "er",
+    title: "Entity Relationship",
+    tag: "erDiagram",
+    icon: "⊞",
+    iconBg: "#1a2a2a",
+    code: `erDiagram
+    USER {
+        uuid id PK
+        string email UK
+        string password_hash
+        timestamp created_at
+    }
+    ORGANIZATION {
+        uuid id PK
+        string name
+        string plan
+    }
+    PROJECT {
+        uuid id PK
+        uuid org_id FK
+        string name
+        string status
+    }
+    TASK {
+        uuid id PK
+        uuid project_id FK
+        uuid assignee_id FK
+        string title
+        string priority
+    }
+    USER }o--o{ ORGANIZATION : "member of"
+    ORGANIZATION ||--o{ PROJECT : owns
+    PROJECT ||--o{ TASK : contains
+    USER ||--o{ TASK : "assigned to"`
+  },
+  {
+    id: "gitgraph",
+    title: "Git Graph",
+    tag: "gitGraph",
+    icon: "⑂",
+    iconBg: "#2a1a1a",
+    code: `gitGraph
+    commit id: "init"
+    commit id: "add auth module"
+    branch feature/oauth
+    checkout feature/oauth
+    commit id: "add google provider"
+    commit id: "add github provider"
+    commit id: "token refresh logic"
+    branch bugfix/token-expiry
+    checkout bugfix/token-expiry
+    commit id: "fix off-by-one"
+    checkout feature/oauth
+    merge bugfix/token-expiry
+    checkout main
+    branch release/v1.2
+    checkout release/v1.2
+    commit id: "bump version"
+    merge feature/oauth id: "merge oauth"
+    checkout main
+    merge release/v1.2 tag: "v1.2.0"`
+  },
+  {
+    id: "gantt",
+    title: "Gantt Chart",
+    tag: "gantt",
+    icon: "▤",
+    iconBg: "#1a2a1e",
+    code: `gantt
+    title Backend Service — Q3 Roadmap
+    dateFormat YYYY-MM-DD
+    excludes weekends
+    section Infrastructure
+    Provision OCI instances     :done,    inf1, 2024-07-01, 5d
+    Configure VCN & networking  :done,    inf2, after inf1, 3d
+    Set up bastion & IAM        :active,  inf3, after inf2, 4d
+    section Auth Service
+    Design JWT flow             :done,    auth1, 2024-07-01, 3d
+    Implement token endpoints   :active,  auth2, after auth1, 6d
+    Integration tests           :         auth3, after auth2, 4d
+    section API Gateway
+    Route configuration         :         gw1, after inf3, 5d
+    Rate limiting middleware    :         gw2, after gw1, 3d
+    Load testing                :crit,    gw3, after gw2, 4d`
+  },
+  {
+    id: "c4",
+    title: "C4 Context",
+    tag: "C4Context",
+    icon: "⊙",
+    iconBg: "#1c1c2e",
+    code: `C4Context
+    title System Context — Payment Platform
+    Person(customer, "Customer", "Makes purchases")
+    Person(admin, "Admin", "Manages platform")
+    System(payment, "Payment Platform", "Handles checkout, billing, refunds")
+    System_Ext(stripe, "Stripe", "Payment processing")
+    System_Ext(bank, "Banking Network", "Settlement")
+    System_Ext(email, "Email Service", "Transactional emails")
+    System_Ext(fraud, "Fraud Detection API", "Risk scoring")
+    Rel(customer, payment, "Checkout, view history")
+    Rel(admin, payment, "Manage refunds, reports")
+    Rel(payment, stripe, "Charge cards")
+    Rel(payment, fraud, "Score transactions")
+    Rel(payment, email, "Send receipts")
+    Rel(stripe, bank, "Settle funds")`
+  },
+  {
+    id: "pie",
+    title: "Pie Chart",
+    tag: "pie",
+    icon: "◔",
+    iconBg: "#2a2a1a",
+    code: `pie title API Error Distribution (last 30d)
+    "5xx Server Error"   : 42
+    "4xx Client Error"   : 31
+    "Timeout"            : 15
+    "Auth Failure"       : 8
+    "Rate Limited"       : 4`
+  },
+  {
+    id: "timeline",
+    title: "Timeline",
+    tag: "timeline",
+    icon: "→",
+    iconBg: "#1a2a2e",
+    code: `timeline
+    title Linux Kernel Milestones
+    1991 : First release (0.01)
+         : Linus posts to comp.os.minix
+    1994 : Kernel 1.0 released
+    1996 : Kernel 2.0 — SMP support
+    2003 : Kernel 2.6 — scheduler rewrite
+    2011 : Kernel 3.0
+    2015 : Kernel 4.0 — live patching
+    2019 : Kernel 5.0
+    2022 : Kernel 6.0 — new arch support`
+  },
+  {
+    id: "mindmap",
+    title: "Mindmap",
+    tag: "mindmap",
+    icon: "✦",
+    iconBg: "#1e2a1a",
+    code: `mindmap
+  root((Distributed Systems))
+    Consistency
+      Strong
+      Eventual
+      Causal
+    Consensus
+      Raft
+      Paxos
+      PBFT
+    Networking
+      gRPC
+      REST
+      Message Queues
+        Kafka
+        NATS
+    Observability
+      Metrics
+        Prometheus
+      Tracing
+        Jaeger
+      Logging
+        Loki
+    Storage
+      SQL
+        PostgreSQL
+      NoSQL
+        Redis`
+  },
+  {
+    id: "xychart",
+    title: "XY Chart",
+    tag: "xychart-beta",
+    icon: "↗",
+    iconBg: "#2e1a1a",
+    code: `xychart-beta
+    title "Monthly API Requests (millions)"
+    x-axis [Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec]
+    y-axis "Requests (M)" 0 --> 120
+    bar  [20, 25, 30, 42, 55, 61, 70, 68, 80, 95, 105, 118]
+    line [20, 25, 30, 42, 55, 61, 70, 68, 80, 95, 105, 118]`
+  },
+  {
+    id: "quadrant",
+    title: "Quadrant Chart",
+    tag: "quadrantChart",
+    icon: "⊕",
+    iconBg: "#1a1e2e",
+    code: `quadrantChart
+    title Tech Debt vs Business Value
+    x-axis Low Effort --> High Effort
+    y-axis Low Value --> High Value
+    quadrant-1 Do First
+    quadrant-2 Plan Carefully
+    quadrant-3 Reconsider
+    quadrant-4 Quick Wins
+    Auth refactor: [0.3, 0.8]
+    DB migration: [0.8, 0.9]
+    CSS cleanup: [0.2, 0.2]
+    API versioning: [0.6, 0.85]
+    Log rotation fix: [0.15, 0.5]
+    Rewrite in Rust: [0.95, 0.4]
+    Add metrics: [0.4, 0.75]`
+  }
+];
+
+// Build nav
+const nav = document.getElementById('nav');
+diagrams.forEach(d => {
+  const a = document.createElement('a');
+  a.href = `#${d.id}`;
+  a.textContent = d.title;
+  nav.appendChild(a);
+});
+
+// Build gallery
+const gallery = document.getElementById('gallery');
+diagrams.forEach(d => {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.id = d.id;
+  card.innerHTML = `
+    <div class="card-header">
+      <div class="card-title">
+        <div class="card-icon" style="background:${d.iconBg}; color:${d.iconBg === '#1a2a1e' ? '#3fb950' : '#58a6ff'}">${d.icon}</div>
+        <h2>${d.title}</h2>
+      </div>
+      <span class="card-tag">${d.tag}</span>
+    </div>
+    <div class="diagram-wrap" id="wrap-${d.id}">
+      <span class="diagram-loading">rendering…</span>
+    </div>`;
+  gallery.appendChild(card);
+});
+
+// Init mermaid and render
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'default',
+  fontFamily: 'Inter, system-ui, sans-serif',
+  fontSize: 14,
+  flowchart: { curve: 'basis', padding: 20 },
+  sequence: { actorMargin: 60, useMaxWidth: true },
+  gantt: { useMaxWidth: true },
+  er: { useMaxWidth: true },
+  c4: { useMaxWidth: true },
+});
+
+async function renderAll() {
+  for (const d of diagrams) {
+    const wrap = document.getElementById(`wrap-${d.id}`);
+    try {
+      const id = `mermaid-${d.id}`;
+      const { svg } = await mermaid.render(id, d.code);
+      wrap.innerHTML = svg;
+    } catch (err) {
+      wrap.innerHTML = `<div class="diagram-error">⚠ render error<br><small>${err.message}</small></div>`;
+    }
+  }
+}
+
+renderAll();
+</script>
+</body>
+</html>

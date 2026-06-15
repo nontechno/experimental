@@ -1,0 +1,7 @@
+{
+	"width":	1280,
+	"height":	900,
+	"css_file":	"./viewer.css",
+
+	"logging":	true
+}

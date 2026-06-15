@@ -1,0 +1,4 @@
+
+Delete specific files (e.g., only .log files):
+find /path/to/target_directory -type f -name "*.log" -delete
+
