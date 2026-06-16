@@ -51,7 +51,7 @@ func loadMarkdown(fileName string, store *Holder) (bool, error) {
 				}
 			}
 		} else {
-			if strings.HasPrefix(line, "|-----") {
+			if strings.HasPrefix(line, "|---") {
 				foundTableContent = true
 				if parts := len(strings.Split(line, "|")); parts < 4 {
 					// to few parts - exit
