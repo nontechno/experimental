@@ -1,0 +1,47 @@
+* how to identify your touch monitor and tell windows (10) about it
+
+...
+
+From your output, the active monitors with Status OK are:
+- `DISPLAY\SAM0F93\5&2D5ECA05&0&UID41216` — Samsung
+- `DISPLAY\SAM0F93\5&2D5ECA05&0&UID41220` — Samsung  
+- `DISPLAY\GSM5B09\5&2D5ECA05&0&UID41222` — LG (currently mapped to touch)
+- `DISPLAY\RTD0000\5&2D5ECA05&0&UID41217` — unknown
+
+Run this to get human-readable monitor names:
+```powershell
+Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID | ForEach-Object {
+    $name = ($_.UserFriendlyName | Where-Object {$_} | ForEach-Object {[char]$_}) -join ''
+    Write-Host "Name: $name | Instance: $($_.InstanceName)"
+}
+```
+
+Once we identify which InstanceId is the Prechen, we update the Digimon key like this:
+
+```powershell
+$touchDevice = "20-\\?\HID#VID_222A&PID_0335&Col01#9&1fd00baf&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"
+$newDisplay = "\\?\DISPLAY#RTD0000#5&2d5eca05&0&UID41217#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Wisp\Pen\Digimon" -Name $touchDevice -Value $newDisplay
+```
+
+But first — run the `WmiMonitorID` command so we pick the right display.
+
+**`RTD0000` UID41217 is the Prechen touch monitor** (12.3FHD — 12.3 inch Full HD, matches a portable touch monitor perfectly).
+
+Currently touch is mapped to `LG Ultra HD` (UID41222). We need to change it to `RTD0000` UID41217.
+
+Run this in Administrator PowerShell:
+
+```powershell
+$touchDevice = "20-\\?\HID#VID_222A&PID_0335&Col01#9&1fd00baf&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"
+$newDisplay = "\\?\DISPLAY#RTD0000#5&2d5eca05&0&UID41217#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Wisp\Pen\Digimon" -Name $touchDevice -Value $newDisplay
+```
+
+Restart the computer
+
+After that, touch events should go to the 12.3FHD monitor. 
+Test it — if it works but resets after reboot, 
+we'll need to add a scheduled task to re-apply the registry value on login.
