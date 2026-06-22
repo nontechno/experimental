@@ -46,3 +46,5 @@ After that, touch events should go to the 12.3FHD monitor.
 Test it — if it works but resets after reboot, 
 we'll need to add a scheduled task to re-apply the registry value on login.
 
+
+
