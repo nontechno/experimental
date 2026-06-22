@@ -1,0 +1,23 @@
+{
+	"event_types": [
+		"deploy",
+		"rollback"
+	],
+	"headers": {
+		"Authorization": "Bearer YOUR_TOKEN_HERE"
+	},
+	"log_level": "info",
+	"reconnect": {
+		"initial_delay_sec": 1,
+		"max_attempts": 0,
+		"max_delay_sec": 60,
+		"multiplier": 2,
+		"reset_after_sec": 30
+	},
+	"script": "/usr/local/bin/handle-event.sh",
+	"script_args": [],
+	"script_timeout_sec": 30,
+	"server_url": "https://example.com/events",
+	"topic": "deployments",
+	"url_template": ""
+}
