@@ -1,3 +1,5 @@
+# how to create a "compatible" script from script (same shell)
+
 Use `$SHELL` or `#!/proc/self/exe` — but the right approach depends on what "compatible" means:
 
 ## 1. Use `$SHELL` (current user's login shell)
