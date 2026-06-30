@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 )
@@ -91,4 +93,28 @@ func (h *Holder) print() {
 		fmt.Printf(format, entry.OriginalKey, right)
 	}
 	fmt.Printf("%s", suffix)
+}
+
+func (h *Holder) save(filename string) error {
+	sortedKeysAll := slices.Sorted(maps.Keys(h.data))
+
+	exclusions := getExclusionList()
+	sortedKeys := []string{}
+	for _, key := range sortedKeysAll {
+		if !exclusions[key] {
+			sortedKeys = append(sortedKeys, key)
+		}
+	}
+
+	var cleanData = map[string][]string{}
+
+	for _, key := range sortedKeys {
+		entry := h.data[key]
+		cleanData[entry.OriginalKey] = entry.Values
+	}
+	raw, err := json.MarshalIndent(cleanData, "", "\t")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filename, raw, 0644)
 }

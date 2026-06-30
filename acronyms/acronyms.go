@@ -32,6 +32,11 @@ func main() {
 	}
 
 	store.print()
+	if fileName := configGet("save.as"); len(fileName) > 0 {
+		if err := store.save(fileName); err != nil {
+			fmt.Printf("failed to produce [%s]: due to: %v\n", fileName, err)
+		}
+	}
 }
 
 func getListOfFiles() []string {

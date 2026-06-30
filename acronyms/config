@@ -17,3 +17,5 @@ highlights:
 	./highlights
 trace:
 	yes
+save.as:
+	./acronyms.json
