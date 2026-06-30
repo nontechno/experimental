@@ -1,0 +1,60 @@
+/* ── Dark theme ── */
+
+body {
+  margin: 0;
+  padding: 2rem;
+  background-color: #0d1117;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 16px;
+  color: #c9d1d9;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background-color: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+tr + tr td {
+  border-top: 1px solid #21262d;
+}
+
+td {
+  padding: 1.25rem 1.5rem;
+  vertical-align: top;
+}
+
+td.label {
+  width: 1%;
+  white-space: nowrap;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #58a6ff;
+  background-color: #0d1117;
+  border-right: 2px solid #30363d;
+}
+
+td.content {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: #8b949e;
+  background-color: #161b22;
+}
+
+td.content ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  list-style-type: disc;
+}
+
+td.content li {
+  color: #c9d1d9;
+}
+
+td.content li + li {
+  margin-top: 0.4rem;
+}

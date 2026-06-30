@@ -1,0 +1,65 @@
+/* ── Bright / bold colors ── */
+
+body {
+  margin: 0;
+  padding: 2rem;
+  background-color: #fffbea;
+  font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  color: #1a1a1a;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background-color: #ffffff;
+  border: 2px solid #000000;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 4px 4px 0 #000000;
+}
+
+tr + tr td {
+  border-top: 2px solid #000000;
+}
+
+td {
+  padding: 1.25rem 1.5rem;
+  vertical-align: top;
+}
+
+td.label {
+  width: 1%;
+  white-space: nowrap;
+  font-size: 2rem;
+  font-weight: 800;
+  color: #ffffff;
+  background-color: #e6007a;
+  border-right: 2px solid #000000;
+  text-shadow: 1px 1px 0 rgba(0,0,0,0.3);
+}
+
+td.content {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #1a1a1a;
+  background-color: #ffffff;
+}
+
+td.content ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  list-style-type: disc;
+}
+
+td.content li {
+  color: #1a1a1a;
+}
+
+td.content li + li {
+  margin-top: 0.35rem;
+}
+
+/* Alternating row accent */
+tr:nth-child(2) td.label { background-color: #7c3aed; }
+tr:nth-child(3) td.label { background-color: #0284c7; }

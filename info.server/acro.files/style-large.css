@@ -1,0 +1,61 @@
+/* ── Large fonts / high readability ── */
+
+body {
+  margin: 0;
+  padding: 3rem;
+  background-color: #fafaf8;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 20px;
+  color: #1a1a1a;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background-color: #ffffff;
+  border: 2px solid #cccccc;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+tr + tr td {
+  border-top: 2px solid #e4e4e4;
+}
+
+td {
+  padding: 2rem 2.5rem;
+  vertical-align: top;
+}
+
+td.label {
+  width: 1%;
+  white-space: nowrap;
+  font-size: 3.5rem;
+  font-weight: 900;
+  color: #000000;
+  background-color: #f0f0ee;
+  border-right: 3px solid #bbbbbb;
+  letter-spacing: -0.02em;
+}
+
+td.content {
+  font-size: 1.25rem;
+  line-height: 1.9;
+  color: #2a2a2a;
+  background-color: #ffffff;
+}
+
+td.content ul {
+  margin: 0;
+  padding-left: 1.5rem;
+  list-style-type: disc;
+}
+
+td.content li {
+  color: #2a2a2a;
+}
+
+td.content li + li {
+  margin-top: 0.6rem;
+}

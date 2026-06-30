@@ -1,0 +1,5 @@
+{
+	"address": 		":8080",
+	"acro.path": 	"./acronyms.json",
+	"acro.files": 	"./acro.files"
+}

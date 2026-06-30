@@ -1,0 +1,67 @@
+/* ── Default: clean light theme ── */
+
+/* Page */
+body {
+  margin: 0;
+  padding: 2rem;
+  background-color: #f4f4f4;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  color: #222222;
+}
+
+/* Table shell */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background-color: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+/* Row dividers */
+tr + tr td {
+  border-top: 1px solid #e8e8e8;
+}
+
+/* All cells */
+td {
+  padding: 1.25rem 1.5rem;
+  vertical-align: top;
+}
+
+/* Left label cell */
+td.label {
+  width: 1%;
+  white-space: nowrap;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #111111;
+  background-color: #ffffff;
+  border-right: 2px solid #e0e0e0;
+}
+
+/* Right content cell */
+td.content {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #333333;
+  background-color: #ffffff;
+}
+
+/* Bullet list */
+td.content ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  list-style-type: disc;
+}
+
+td.content li {
+  color: #333333;
+}
+
+td.content li + li {
+  margin-top: 0.35rem;
+}
