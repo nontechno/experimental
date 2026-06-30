@@ -1,12 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -39,7 +37,7 @@ func acroHandler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 
 	if len(acronyms) == 0 || (len(parts) == 1 && parts[0] == "reload") {
-		reloadAcronyms()
+		reloadAcronyms(w)
 	}
 
 	if len(acronyms) == 0 {
@@ -62,25 +60,6 @@ func stringMatch(pattern, candidate string) bool {
 		return matched
 	}
 	return false
-}
-
-func reloadAcronyms() {
-	fileName := getConfig("acro.path", "./acronyms.json")
-	raw, err := os.ReadFile(fileName)
-	if err != nil {
-		log.Printf("Error reading file %v: %v", fileName, err)
-		return
-	}
-
-	if err := json.Unmarshal(raw, &acronyms); err != nil {
-		log.Printf("Error parsing file %v: %v", fileName, err)
-		return
-	}
-
-	lowerCaseAcronyms = map[string]string{}
-	for key := range acronyms {
-		lowerCaseAcronyms[strings.ToLower(key)] = key
-	}
 }
 
 func showMissingData(w http.ResponseWriter, r *http.Request) {
