@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -10,9 +12,12 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
 
 var (
+	acroInnerPrefix = "/inner/"
+
 	acronyms          = map[string][]string{}
 	lowerCaseAcronyms = map[string]string{}
 
@@ -22,6 +27,7 @@ var (
 	}
 
 	acroLinkMatch *regexp.Regexp
+	acroLinksMap  sync.Map
 )
 
 func acroInit() {
@@ -130,6 +136,19 @@ func acroLocalFile(w http.ResponseWriter, r *http.Request) bool {
 
 		return true
 	}
+
+	if strings.HasPrefix(urlPath, acroInnerPrefix) {
+		hash := strings.TrimPrefix(urlPath, acroInnerPrefix)
+		if value, found := acroLinksMap.Load(hash); found {
+			path := value.(string)
+			http.ServeFile(w, r, path)
+		} else {
+			fmt.Fprintf(w, "not found")
+			w.WriteHeader(http.StatusNotFound)
+		}
+		return true
+	}
+
 	return false
 }
 
@@ -183,7 +202,7 @@ func printEntry(media io.Writer, name string, values []string) {
 			text := value
 			if m := acroLinkMatch.FindStringSubmatch(value); m != nil {
 				linkText := m[1]
-				url := m[2]
+				url := convertUrl(m[2])
 				text = fmt.Sprintf(`<a href="%s">%s</a>`, url, linkText)
 			}
 
@@ -195,6 +214,29 @@ func printEntry(media io.Writer, name string, values []string) {
 	}
 
 	fmt.Fprintf(media, acroTableEntry, name, insert)
+}
+
+func isLocalFilePath(url string) bool {
+	return strings.HasPrefix(url, "/")
+}
+
+func getHash(from string) string {
+	h := sha1.New()
+	h.Write([]byte(from))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func convertUrl(url string) string {
+	if isLocalFilePath(url) {
+		hash := getHash(url)
+		if _, ok := acroLinksMap.Load(hash); ok {
+			return acroInnerPrefix + hash
+		}
+
+		acroLinksMap.Store(hash, url)
+		return acroInnerPrefix + hash
+	}
+	return url
 }
 
 /*
