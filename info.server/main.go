@@ -5,11 +5,19 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // helloHandler greets the user and echoes the requested path
-func helloHandler(w http.ResponseWriter, r *http.Request) {
+func rootHandler(w http.ResponseWriter, r *http.Request) {
 	host := strings.ToLower(strings.Split(r.Host, ":")[0])
+	path := r.URL.Path
+	start := time.Now()
+	defer func() {
+		took := time.Since(start)
+		fmt.Printf("[%v] %s: %s\n", took.Microseconds(), host, path)
+	}()
+
 	switch host {
 	case "acro":
 		acroHandler(w, r)
@@ -26,7 +34,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Register the handler function for the root path
-	mux.HandleFunc("/", helloHandler)
+	mux.HandleFunc("/", rootHandler)
 
 	// Define the network address
 	addr := getConfig("address", ":8080")
