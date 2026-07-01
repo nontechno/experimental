@@ -1,0 +1,4 @@
+
+# Reverse video (most portable)
+printf '\033[7mIMPORTANT\033[0m\n'
+
