@@ -12,7 +12,7 @@ import (
 
 const (
 	// Pin the version you want. Check https://cdn.jsdelivr.net/npm/mermaid/
-	mermaidVersion = "11.15.0"	// "11.4.1"
+	mermaidVersion = "11.15.0" // "11.4.1"
 	mermaidCDN     = "https://cdn.jsdelivr.net/npm/mermaid@" + mermaidVersion + "/dist/mermaid.min.js"
 
 	// Local cache path so we only download once per machine

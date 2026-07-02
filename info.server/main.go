@@ -22,6 +22,14 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	case "acro":
 		acroHandler(w, r)
 		return
+	case "localhost":
+		if strings.HasPrefix(path, "/acro/") {
+			// http://localhost/acro/abc is the same as: http://acro/abc
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = strings.TrimPrefix(path, "/acro")
+			acroHandler(w, r2)
+			return
+		}
 	}
 	fmt.Fprintf(w, "unhandled: method [%v], host [%v], path [%v]", r.Method, r.Host, r.URL.Path)
 }

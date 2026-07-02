@@ -143,18 +143,19 @@ func renderMarkdownToHTML(ctx context.Context, compiler *mermaidcdp.Compiler, sr
 	}
 
 	// Wrap in a minimal but complete HTML page
-	page := htmlPage(body.String())
+	title := ExtractTitle(string(src))
+	page := htmlPage(title, body.String())
 	return []byte(page), nil
 }
 
 // htmlPage wraps rendered HTML body content in a minimal standalone HTML page.
-func htmlPage(body string) string {
+func htmlPage(title, body string) string {
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Rendered Markdown</title>
+  <title>` + title + `</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }
     table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
