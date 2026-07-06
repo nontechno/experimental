@@ -1,0 +1,3 @@
+
+# in .zshrc, at shell startup
+export SHELL_SESSION_ID=${SHELL_SESSION_ID:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
