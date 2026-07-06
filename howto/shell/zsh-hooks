@@ -1,0 +1,16 @@
+# ~/.zshrc or a sourced file
+
+autoload -Uz add-zsh-hook
+
+_custom_cmd_preexec() {
+    # ...
+}
+
+_custom_cmd_precmd() {
+    local exit_code=$?   # capture immediately, before anything else touches it
+    # ...
+    return $exit_code
+}
+
+add-zsh-hook preexec _custom_cmd_preexec
+add-zsh-hook precmd _custom_cmd_precmd
