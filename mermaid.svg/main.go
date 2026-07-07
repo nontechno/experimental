@@ -36,12 +36,18 @@ func run() error {
 		outFile    = flag.String("out", "", "Output HTML file (default: stdout)")
 		rawMermaid = flag.Bool("mermaid", false, "Treat input as raw Mermaid source, output SVG directly")
 		timeout    = flag.Duration("timeout", 30*time.Second, "Rendering timeout")
+		themeName  = flag.String("theme", "default", "Theme: "+availableThemes())
 	)
 	flag.Parse()
 
+	// Resolve theme.
+	theme, err := ResolveTheme(*themeName)
+	if err != nil {
+		return fmt.Errorf("unknown theme %q — available: %s", *themeName, availableThemes())
+	}
+
 	// Read input
 	var input []byte
-	var err error
 	if *inFile != "" {
 		input, err = os.ReadFile(*inFile)
 		if err != nil {
@@ -69,7 +75,7 @@ func run() error {
 	if *rawMermaid {
 		output, err = renderMermaidToSVG(ctx, compiler, string(input))
 	} else {
-		output, err = renderMarkdownToHTML(ctx, compiler, input)
+		output, err = renderMarkdownToHTML(ctx, compiler, input, theme)
 	}
 	if err != nil {
 		return err
@@ -87,6 +93,19 @@ func run() error {
 	return err
 }
 
+func getConfig(jsSource string) *mermaidcdp.Config {
+	return &mermaidcdp.Config{
+		JSSource: jsSource,
+		Theme:    "default", // "default", "dark", "forest", "neutral", "base"
+	}
+	/*
+		return &mermaidcdp.Config{
+			JSSource: jsSource,
+			Theme:    "neutral", // "default", "dark", "forest", "neutral", "base"
+		}
+	*/
+}
+
 // newCompiler builds a mermaidcdp.Compiler backed by a headless Chromium
 // browser. It loads MermaidJS from a CDN once and reuses the browser tab
 // for all subsequent renders — much cheaper than spawning mmdc per diagram.
@@ -94,15 +113,13 @@ func run() error {
 // The returned compiler MUST be closed when no longer needed.
 func newCompiler(ctx context.Context) (*mermaidcdp.Compiler, error) {
 	// Download mermaid.min.js source at startup.
-	// In production you'd embed this with //go:embed or cache it on disk.
+	// In production, you'd embed this with //go:embed or cache it on disk.
 	jsSource, err := downloadMermaidJS(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("downloading mermaid.js: %w", err)
 	}
 
-	compiler, err := mermaidcdp.New(&mermaidcdp.Config{
-		JSSource: jsSource,
-	})
+	compiler, err := mermaidcdp.New(getConfig(jsSource))
 	if err != nil {
 		return nil, fmt.Errorf("starting CDP compiler: %w\n\nMake sure Chrome/Chromium is installed.", err)
 	}
@@ -124,7 +141,7 @@ func renderMermaidToSVG(ctx context.Context, compiler *mermaidcdp.Compiler, src 
 // renderMarkdownToHTML converts full Markdown (with optional Mermaid fenced
 // blocks) to a standalone HTML page. Each ```mermaid block is replaced with
 // an inline <svg> element — no JavaScript required in the output.
-func renderMarkdownToHTML(ctx context.Context, compiler *mermaidcdp.Compiler, src []byte) ([]byte, error) {
+func renderMarkdownToHTML(ctx context.Context, compiler *mermaidcdp.Compiler, src []byte, styleBlock string) ([]byte, error) {
 	md := goldmark.New(
 		goldmark.WithExtensions(
 			// GFM tables, strikethrough, autolinks, task lists
@@ -144,27 +161,36 @@ func renderMarkdownToHTML(ctx context.Context, compiler *mermaidcdp.Compiler, sr
 
 	// Wrap in a minimal but complete HTML page
 	title := ExtractTitle(string(src))
-	page := htmlPage(title, body.String())
+	page := htmlPage(title, body.String(), styleBlock)
 	return []byte(page), nil
 }
 
+const fallbackStyle = `<style>
+    body	{ font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }
+    table	{ border-collapse: collapse; width: 100%; margin: 1rem 0; }
+    th, td	{ border: 1px solid #ccc; padding: .4rem .8rem; text-align: left; }
+    th		{ background: #f5f5f5; }
+    pre		{ background: #f8f8f8; padding: 1rem; overflow-x: auto; border-radius: 4px; }
+    code	{ font-family: "JetBrains Mono", "Fira Code", monospace; font-size: .9em; }
+    svg		{ max-width: 100%; height: auto; display: block; margin: 1rem 0; }
+  </style>`
+
 // htmlPage wraps rendered HTML body content in a minimal standalone HTML page.
-func htmlPage(title, body string) string {
+func htmlPage(title, body, style string) string {
+	// style := fallbackStyle
+
+	// cssHref := `style.css`
+	// style := `<link rel="stylesheet" href="` + cssHref + `">`
+
+	style = `  <style>` + style + `</style>`
+
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>` + title + `</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }
-    table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
-    th, td { border: 1px solid #ccc; padding: .4rem .8rem; text-align: left; }
-    th { background: #f5f5f5; }
-    pre { background: #f8f8f8; padding: 1rem; overflow-x: auto; border-radius: 4px; }
-    code { font-family: "JetBrains Mono", "Fira Code", monospace; font-size: .9em; }
-    svg { max-width: 100%; height: auto; display: block; margin: 1rem 0; }
-  </style>
+` + style + `
 </head>
 <body>
 ` + body + `

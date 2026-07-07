@@ -1,0 +1,88 @@
+/* theme: forest — Warm green-tinted theme. */
+
+:root {
+  --font-body:      system-ui, sans-serif;
+  --font-head:      var(--font-body);
+  --font-mono:      "JetBrains Mono", "Fira Code", monospace;
+  --font-size:      16px;
+  --font-size-mono: .9em;
+  --line-height:    1.6;
+  --max-width:      860px;
+  --radius:         4px;
+  --cell-pad:       .4rem .8rem;
+  --text:       #1c2b1e;
+  --bg:         #f4f8f4;
+  --heading:    #1a3320;
+  --muted:      #5a7a5e;
+  --border:     #b2cdb6;
+  --accent:     #2e7d32;
+  --link:       #2e7d32;
+  --link-hover: #1b5e20;
+  --code-bg:    #e8f5e9;
+  --th-bg:      #c8e6c9;
+  --th-text:    #1a3320;
+  --row-alt:    #f1f8f1;
+}
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    font-family:    var(--font-body);
+    font-size:      var(--font-size);
+    line-height:    var(--line-height);
+    color:          var(--text);
+    background:     var(--bg);
+    max-width:      var(--max-width);
+    margin:         2rem auto;
+    padding:        0 1rem;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family:    var(--font-head);
+    color:          var(--heading);
+    border-bottom:  1px solid var(--border);
+    padding-bottom: .3rem;
+    margin-top:     2rem;
+  }
+
+  a             { color: var(--link); }
+  a:hover       { color: var(--link-hover); }
+
+  p             { margin: .8rem 0; }
+
+  blockquote {
+    border-left: 4px solid var(--accent);
+    margin:      0 0 1rem 0;
+    padding:     .5rem 1rem;
+    color:       var(--muted);
+    background:  var(--code-bg);
+  }
+
+  table         { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td        { border: 1px solid var(--border); padding: var(--cell-pad); text-align: left; }
+  th            { background: var(--th-bg); color: var(--th-text); font-weight: 600; }
+  tr:nth-child(even) td { background: var(--row-alt); }
+
+  pre {
+    background:    var(--code-bg);
+    border:        1px solid var(--border);
+    border-radius: var(--radius);
+    padding:       1rem;
+    overflow-x:    auto;
+  }
+  code {
+    font-family:   var(--font-mono);
+    font-size:     var(--font-size-mono);
+    background:    var(--code-bg);
+    padding:       .15em .35em;
+    border-radius: 3px;
+  }
+  pre code      { background: none; padding: 0; font-size: inherit; }
+
+  hr            { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+
+  img           { max-width: 100%; height: auto; }
+
+  svg           { max-width: 100%; height: auto; display: block; margin: 1rem 0; }
+
+  input[type="checkbox"] { margin-right: .4em; }
