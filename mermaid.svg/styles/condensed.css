@@ -27,6 +27,13 @@
   --th-bg:      #ececec;
   --th-text:    #111111;
   --row-alt:    #f9f9f9;
+
+  --mermaid-primaryColor:	var(--code-bg);
+  --mermaid-primaryBorderColor:	var(--border);
+  --mermaid-primaryTextColor:	var(--link);
+  --mermaid-lineColor:		var(--accent);
+  --mermaid-fontSize:		13px;
+  --mermaid-fontFamily:		var(--font-mono);
 }
 
   *, *::before, *::after { box-sizing: border-box; }

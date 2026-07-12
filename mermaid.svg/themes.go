@@ -33,6 +33,12 @@ var Forest string
 //go:embed styles/sepia.css
 var Sepia string
 
+//go:embed styles/interactive.html
+var interactivePlug string
+
+//go:embed styles/mermaidInit.js
+var mermaidInit string
+
 // Themes is the runtime registry used by the -theme flag.
 var Themes = map[string]string{
 	"default":   Default,
@@ -50,6 +56,10 @@ func ResolveTheme(themeName string) (string, error) {
 		if raw, err := os.ReadFile(themeName); err == nil && len(raw) > 0 {
 			return string(raw), nil
 		}
+
+		// todo: one more option - external .css file
+		// <link rel="stylesheet" href="styles.css">
+
 		return "", fmt.Errorf("unknown theme %q — available: %s", themeName, availableThemes())
 	} else {
 		return theme, nil
