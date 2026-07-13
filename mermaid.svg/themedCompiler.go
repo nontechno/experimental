@@ -32,6 +32,10 @@ func (c *themedCompiler) Compile(ctx context.Context, req *mermaid.CompileReques
 		/* "lineColor":				*/ "#456789": "var(--mermaid-lineColor)",
 		/* "fontSize":				*/ "14px": "var(--mermaid-fontSize)",
 		/* "fontFamily":			*/ "JetBrains Mono, monospace": "var(--mermaid-fontFamily)",
+		/* "clusterBkg": 			*/ "#56789a": "var(--th-bg)",
+		/* "clusterBorder":			*/ "#6789ab": "var(--border)",
+		/* "edgeLabelBackground":	*/ "#789abc": "var(--bg)",
+		/* "titleColor":			*/ "#89abcd": "var(--muted)",
 
 		"#ffffff": "var(--mermaid-node-fill)",
 		"#333333": "var(--mermaid-node-border)",
