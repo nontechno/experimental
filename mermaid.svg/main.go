@@ -66,7 +66,7 @@ func run() error {
 	defer cancel()
 
 	// Build the CDP compiler (reusable across many renders)
-	compiler, err := newCompiler(ctx)
+	compiler, err := newCompiler(ctx, *rawMermaid)
 	if err != nil {
 		return err
 	}
