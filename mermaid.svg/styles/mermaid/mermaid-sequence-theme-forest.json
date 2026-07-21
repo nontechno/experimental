@@ -1,0 +1,14 @@
+{
+  "_meta": { "theme": "forest", "usage_example": "%%{init: {'theme': 'base', 'themeVariables': <below>}}%%" },
+  "themeVariables": {
+    "background": "#f2f7f0", "primaryColor": "#dcedd6", "primaryTextColor": "#1e3a1a",
+    "primaryBorderColor": "#5a9450", "lineColor": "#3f7038", "textColor": "#1e3a1a",
+    "actorBkg": "#d6ead0", "actorBorder": "#5a9450", "actorTextColor": "#1e3a1a", "actorLineColor": "#7cab72",
+    "signalColor": "#2e5c28", "signalTextColor": "#1e3a1a",
+    "labelBoxBkgColor": "#cfe6c6", "labelBoxBorderColor": "#5a9450", "labelTextColor": "#1e3a1a", "loopTextColor": "#1e3a1a",
+    "noteBorderColor": "#a4a13a", "noteBkgColor": "#f3f0c8", "noteTextColor": "#3a3a17",
+    "activationBorderColor": "#5a9450", "activationBkgColor": "#e4f0df", "sequenceNumberColor": "#ffffff",
+    "fontFamily": "\"trebuchet ms\", verdana, arial, sans-serif", "fontSize": "16px",
+    "actorFontSize": "14px", "noteFontSize": "13px", "messageFontSize": "13px"
+  }
+}

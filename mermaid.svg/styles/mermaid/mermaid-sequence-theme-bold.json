@@ -1,0 +1,16 @@
+{
+  "_meta": { "theme": "bold", "note": "Black/white contrast + bold weights; Mermaid has no stroke-width variable", "usage_example": "%%{init: {'theme': 'base', 'themeVariables': <below>}}%%" },
+  "themeVariables": {
+    "background": "#ffffff", "primaryColor": "#000000", "primaryTextColor": "#ffffff",
+    "primaryBorderColor": "#000000", "lineColor": "#000000", "textColor": "#000000",
+    "actorBkg": "#000000", "actorBorder": "#000000", "actorTextColor": "#ffffff", "actorLineColor": "#000000",
+    "signalColor": "#000000", "signalTextColor": "#000000",
+    "labelBoxBkgColor": "#000000", "labelBoxBorderColor": "#000000", "labelTextColor": "#ffffff", "loopTextColor": "#000000",
+    "noteBorderColor": "#000000", "noteBkgColor": "#ffe600", "noteTextColor": "#000000",
+    "activationBorderColor": "#000000", "activationBkgColor": "#dddddd", "sequenceNumberColor": "#ffffff",
+    "fontFamily": "Arial, Helvetica, sans-serif", "fontSize": "17px",
+    "actorFontSize": "15px", "actorFontWeight": "bold",
+    "noteFontSize": "14px", "noteFontWeight": "bold",
+    "messageFontSize": "14px", "messageFontWeight": "bold"
+  }
+}

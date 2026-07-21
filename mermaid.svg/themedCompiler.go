@@ -45,6 +45,7 @@ func (c *themedCompiler) Compile(ctx context.Context, req *mermaid.CompileReques
 	}
 
 	if c.isMermaid {
+		fontName := "Arial, sans-serif"
 		colorMap = map[string]string{
 
 			/* "primaryColor":			*/ "#123456": "#f8f8f8",
@@ -52,7 +53,9 @@ func (c *themedCompiler) Compile(ctx context.Context, req *mermaid.CompileReques
 			/* "primaryTextColor":		*/ "#345678": "#0066cc",
 			/* "lineColor":				*/ "#456789": "#0066cc",
 			/* "fontSize":				*/ "14px": "12px",
-			/* "fontFamily":			*/ // "JetBrains Mono, monospace": "var(--mermaid-fontFamily)",
+			"16px":                      "12px",
+			/* "fontFamily":			*/ "JetBrains Mono, monospace": fontName,
+			"JetBrains Mono,monospace":                        fontName,
 			/* "clusterBkg": 			*/ "#56789a": "#f5f5f5",
 			/* "clusterBorder":			*/ "#6789ab": "#cccccc",
 			/* "edgeLabelBackground":	*/ "#789abc": "#ffffff",

@@ -1,0 +1,14 @@
+{
+  "_meta": { "theme": "sepia", "usage_example": "%%{init: {'theme': 'base', 'themeVariables': <below>}}%%" },
+  "themeVariables": {
+    "background": "#f4ecd8", "primaryColor": "#e8ddbf", "primaryTextColor": "#4a3a22",
+    "primaryBorderColor": "#a3894f", "lineColor": "#7a6234", "textColor": "#4a3a22",
+    "actorBkg": "#ecdfc0", "actorBorder": "#a3894f", "actorTextColor": "#4a3a22", "actorLineColor": "#b9a679",
+    "signalColor": "#5e4a26", "signalTextColor": "#4a3a22",
+    "labelBoxBkgColor": "#e2d3a8", "labelBoxBorderColor": "#a3894f", "labelTextColor": "#4a3a22", "loopTextColor": "#4a3a22",
+    "noteBorderColor": "#b08d4a", "noteBkgColor": "#f1e2b8", "noteTextColor": "#4a3a22",
+    "activationBorderColor": "#a3894f", "activationBkgColor": "#ece0c4", "sequenceNumberColor": "#f4ecd8",
+    "fontFamily": "Georgia, \"Times New Roman\", serif", "fontSize": "16px",
+    "actorFontSize": "14px", "noteFontSize": "13px", "messageFontSize": "13px"
+  }
+}

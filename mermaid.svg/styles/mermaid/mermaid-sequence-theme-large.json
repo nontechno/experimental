@@ -1,0 +1,18 @@
+{
+  "_meta": { "theme": "large", "usage_example": "%%{init: {'theme': 'base', 'themeVariables': <themeVariables>, 'sequence': <sequence>}}%%" },
+  "themeVariables": {
+    "background": "#ffffff", "primaryColor": "#ECECFF", "primaryTextColor": "#131300",
+    "primaryBorderColor": "#9370DB", "lineColor": "#333333", "textColor": "#333333",
+    "actorBkg": "#ECECFF", "actorBorder": "#9370DB", "actorTextColor": "black", "actorLineColor": "grey",
+    "signalColor": "#333333", "signalTextColor": "#333333",
+    "labelBoxBkgColor": "#ECECFF", "labelBoxBorderColor": "#9370DB", "labelTextColor": "black", "loopTextColor": "black",
+    "noteBorderColor": "#aaaa33", "noteBkgColor": "#fff5ad", "noteTextColor": "black",
+    "activationBorderColor": "#666", "activationBkgColor": "#f4f4f4", "sequenceNumberColor": "white",
+    "fontFamily": "\"trebuchet ms\", verdana, arial, sans-serif", "fontSize": "20px",
+    "actorFontSize": "18px", "noteFontSize": "17px", "messageFontSize": "17px"
+  },
+  "sequence": {
+    "width": 200, "height": 85, "actorMargin": 70, "boxMargin": 14,
+    "messageMargin": 45, "diagramMarginX": 60, "diagramMarginY": 20
+  }
+}
