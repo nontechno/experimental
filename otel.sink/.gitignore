@@ -1,0 +1,3 @@
+/otel.sink
+/data/
+*.jsonl

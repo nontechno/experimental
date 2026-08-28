@@ -1,0 +1,106 @@
+# otel.sink configuration. Every value below is the built-in default, so an
+# empty file (or no -config flag at all) behaves exactly like this one.
+
+otlp:
+  grpc:
+    enabled: true
+    endpoint: 0.0.0.0:4317
+    tls:
+      enabled: false
+      cert_file: ""
+      key_file: ""
+      # Set client_ca_file to require client certificates (mTLS).
+      client_ca_file: ""
+  http:
+    enabled: true
+    endpoint: 0.0.0.0:4318
+    tls:
+      enabled: false
+      cert_file: ""
+      key_file: ""
+      client_ca_file: ""
+  # Rejects export requests larger than this, on both transports.
+  max_request_size_mib: 16
+
+# Dashboard and read-only JSON query API.
+api:
+  enabled: true
+  endpoint: 0.0.0.0:8080
+
+console:
+  # none     print nothing
+  # basic    one line per received batch
+  # normal   one line per span, metric stream and log record
+  # detailed adds resource and record attributes
+  verbosity: normal
+
+# Write every received record to traces.* / metrics.* / logs.* under dir.
+file:
+  enabled: false
+  dir: ./data
+  # jsonl: one JSON object per line. Appends, survives a crash, tailable.
+  # json:  a single JSON array per file, closed on shutdown. Only complete
+  #        after a clean exit, and each run truncates the previous one.
+  format: jsonl
+
+# Stream every record over a Unix domain socket as newline-delimited JSON.
+# Writes never block the export path: if nothing is reading, batches are
+# dropped and counted.
+uds:
+  enabled: false
+  path: /tmp/otel.sink.sock
+  # listen: otel.sink creates the socket, any number of readers attach.
+  # dial:   otel.sink connects to a socket someone else created.
+  mode: listen
+  # Wrap each record as {"signal":"traces","record":{...}} so one socket can
+  # carry all three signals. Set false for bare records.
+  envelope: true
+  # Batches to queue before dropping.
+  buffer: 1024
+
+# Forward every received batch to another OTLP endpoint, which makes
+# otel.sink a proxy: capture locally and pass everything on.
+forward:
+  enabled: false
+  # host:port for grpc, or a base URL for http (signal paths are appended).
+  endpoint: localhost:14317
+  protocol: grpc          # grpc | http
+  # raw:      send the batch exactly as received. Lossless, but filters do
+  #           NOT apply to what goes upstream.
+  # filtered: send what the filter chain kept, with attribute edits (e.g.
+  #           redaction) applied. Use this whenever a filter exists for
+  #           privacy rather than for noise.
+  mode: raw
+  insecure: true          # plaintext; set false and use the files below for TLS
+  ca_file: ""
+  cert_file: ""           # client cert for mTLS
+  key_file: ""
+  headers: {}             # e.g. {authorization: "Bearer ..."}
+  compression: none       # none | gzip
+  timeout: 10s
+  retries: 1
+  # true:  log upstream failures and keep capturing locally.
+  # false: report the failure to the sending SDK, which then applies its own
+  #        retry and drop policy. Correct for a strict proxy.
+  fail_open: true
+
+# Filters run in order, ahead of every output, so the console, files, socket
+# and dashboard all see the same records. `otel.sink -list-filters` prints
+# what is registered; add your own in internal/filter/custom.go.
+filters: []
+#  - name: drop_names
+#    options:
+#      contains: /health,/metrics
+#  - name: redact
+#    options:
+#      keys: db.statement,http.url
+#  - name: sample
+#    options:
+#      ratio: "0.1"
+
+# How many records to keep in memory for the query API. Older records are
+# overwritten; memory use is bounded by these numbers.
+store:
+  max_spans: 10000
+  max_metrics: 10000
+  max_logs: 10000

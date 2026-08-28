@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>otel.sink</title>
+<style>
+  :root {
+    --ink: #14181d;
+    --muted: #6b7480;
+    --line: #e3e6ea;
+    --bg: #ffffff;
+    --panel: #f7f8f9;
+    --accent: #0b6b62;
+    --error: #b42318;
+    --warn: #b54708;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.45;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    padding: 18px 24px; border-bottom: 1px solid var(--line);
+  }
+  h1 {
+    margin: 0; font-family: var(--mono); font-size: 15px;
+    font-weight: 600; letter-spacing: 0.04em;
+  }
+  h1 span { color: var(--accent); }
+  .stats { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .stats b { color: var(--ink); font-weight: 600; }
+  .controls { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  nav { display: flex; gap: 2px; padding: 0 24px; border-bottom: 1px solid var(--line); }
+  nav button {
+    appearance: none; border: 0; background: none; cursor: pointer;
+    font: 600 13px var(--sans); color: var(--muted);
+    padding: 10px 14px; border-bottom: 2px solid transparent;
+  }
+  nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  nav button:focus-visible, input:focus-visible, .controls button:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .toolbar { display: flex; gap: 8px; padding: 14px 24px; flex-wrap: wrap; }
+  input[type="text"], input[type="number"] {
+    font: 13px var(--mono); padding: 6px 9px;
+    border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--ink);
+  }
+  input::placeholder { color: #9aa2ac; }
+  .controls button, .toolbar button {
+    font: 600 12px var(--sans); padding: 6px 12px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--ink);
+  }
+  .controls button:hover, .toolbar button:hover { background: var(--panel); }
+  main { padding: 0 24px 48px; }
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+  th {
+    text-align: left; font: 600 11px var(--sans); letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted);
+    padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover { background: var(--panel); }
+  .num { text-align: right; white-space: nowrap; }
+  .dim { color: var(--muted); }
+  .err { color: var(--error); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .wrap { word-break: break-word; }
+  /* Latency bar: width is the span duration relative to the slowest span on screen. */
+  .bar { display: block; height: 3px; background: var(--accent); opacity: 0.5; margin-top: 3px; border-radius: 2px; }
+  .empty { padding: 48px 0; text-align: center; color: var(--muted); }
+  code { font-family: var(--mono); background: var(--panel); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>otel<span>-</span>sink</h1>
+  <div class="stats" id="stats">waiting for data</div>
+  <div class="controls">
+    <label class="stats"><input type="checkbox" id="auto" checked> auto-refresh 3s</label>
+    <button id="refresh">Refresh</button>
+    <button id="clear">Clear buffer</button>
+  </div>
+</header>
+
+<nav>
+  <button data-tab="traces" aria-selected="true">Traces</button>
+  <button data-tab="metrics" aria-selected="false">Metrics</button>
+  <button data-tab="logs" aria-selected="false">Logs</button>
+</nav>
+
+<div class="toolbar">
+  <input type="text" id="service" placeholder="service" size="16">
+  <input type="text" id="filter" placeholder="name / body contains" size="24">
+  <input type="number" id="limit" value="100" min="1" max="1000" title="max rows">
+  <button id="download" title="Download everything held for this tab, matching the filters above">Download JSON</button>
+  <button id="downloadl" title="Same records, one JSON object per line">Download JSONL</button>
+</div>
+
+<main><div id="view"><p class="empty">No telemetry yet. Point an exporter at localhost:4317 or localhost:4318.</p></div></main>
+
+<script>
+const state = { tab: "traces", timer: null };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// params builds the filter query. The row limit is deliberately left out:
+// the browse endpoints default it to 100, while an export defaults to
+// everything held, which is almost always what you want in a file.
+function params(withLimit = false) {
+  const p = new URLSearchParams();
+  const svc = $("service").value.trim();
+  const f = $("filter").value.trim();
+  if (svc) p.set("service", svc);
+  if (f) p.set(state.tab === "logs" ? "contains" : "name", f);
+  if (withLimit) p.set("limit", $("limit").value || 100);
+  return p.toString();
+}
+
+async function loadStats() {
+  const s = await (await fetch("/api/stats")).json();
+  $("stats").innerHTML =
+    `spans <b>${s.spans_received}</b> (${s.spans_held} held) · ` +
+    `metric streams <b>${s.metrics_received}</b> (${s.metrics_held}) · ` +
+    `logs <b>${s.logs_received}</b> (${s.logs_held})` +
+    (s.services.length ? ` · services ${esc(s.services.join(", "))}` : "");
+}
+
+const attrs = (o) => Object.entries(o || {}).map(([k, v]) =>
+  `${esc(k)}=${esc(typeof v === "object" ? JSON.stringify(v) : v)}`).join(" ");
+
+function renderTraces(rows) {
+  const max = Math.max(1, ...rows.map((r) => r.duration_ms));
+  return table(["Name", "Service", "Duration", "Status", "Trace", "Attributes"], rows.map((r) => `
+    <td class="wrap">${esc(r.name)}<span class="bar" style="width:${(r.duration_ms / max) * 100}%"></span></td>
+    <td>${esc(r.service)}</td>
+    <td class="num">${r.duration_ms.toFixed(2)} ms</td>
+    <td class="${r.status_code === "Error" ? "err" : "dim"}">${esc(r.status_code)}</td>
+    <td class="dim">${esc(r.trace_id.slice(0, 16))}…</td>
+    <td class="wrap dim">${esc(attrs(r.attributes))}</td>`));
+}
+
+function renderMetrics(rows) {
+  return table(["Metric", "Service", "Type", "Points", "Latest"], rows.map((r) => {
+    const p = r.data_points && r.data_points[r.data_points.length - 1];
+    let latest = "—";
+    if (p) latest = p.count ? `count=${p.count} sum=${p.sum ?? 0}` : `value=${p.value ?? 0}`;
+    if (p && p.attributes) latest += " " + attrs(p.attributes);
+    return `
+      <td class="wrap">${esc(r.name)}${r.unit ? ` <span class="dim">${esc(r.unit)}</span>` : ""}</td>
+      <td>${esc(r.service)}</td>
+      <td class="dim">${esc(r.type)}</td>
+      <td class="num">${(r.data_points || []).length}</td>
+      <td class="wrap">${esc(latest)}</td>`;
+  }));
+}
+
+function renderLogs(rows) {
+  return table(["Time", "Severity", "Service", "Body", "Trace"], rows.map((r) => {
+    const sev = (r.severity || "").toUpperCase();
+    const cls = r.severity_number >= 17 ? "err" : r.severity_number >= 13 ? "warn" : "dim";
+    return `
+      <td class="dim">${esc((r.time || "").slice(11, 23))}</td>
+      <td class="${cls}">${esc(sev)}</td>
+      <td>${esc(r.service)}</td>
+      <td class="wrap">${esc(r.body)}</td>
+      <td class="dim">${r.trace_id ? esc(r.trace_id.slice(0, 16)) + "…" : ""}</td>`;
+  }));
+}
+
+function table(headers, rows) {
+  if (!rows.length) return `<p class="empty">Nothing matches. Widen the filters, or send some telemetry.</p>`;
+  return `<table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>` +
+    `<tbody>${rows.map((r) => `<tr>${r}</tr>`).join("")}</tbody></table>`;
+}
+
+async function refresh() {
+  try {
+    await loadStats();
+    const data = await (await fetch(`/api/${state.tab}?${params(true)}`)).json();
+    const view = $("view");
+    if (state.tab === "traces") view.innerHTML = renderTraces(data.spans || []);
+    else if (state.tab === "metrics") view.innerHTML = renderMetrics(data.metrics || []);
+    else view.innerHTML = renderLogs(data.logs || []);
+  } catch (e) {
+    $("view").innerHTML = `<p class="empty">Cannot reach the API: ${esc(e.message)}. Is otel.sink still running?</p>`;
+  }
+}
+
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("nav button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+  state.tab = b.dataset.tab;
+  refresh();
+}));
+["service", "filter", "limit"].forEach((id) => $(id).addEventListener("change", refresh));
+$("refresh").addEventListener("click", refresh);
+// The export endpoint sends Content-Disposition, so a plain navigation
+// downloads the file instead of rendering it.
+$("download").addEventListener("click", () => {
+  window.location = `/api/export?signal=${state.tab}&format=json&${params()}`;
+});
+$("downloadl").addEventListener("click", () => {
+  window.location = `/api/export?signal=${state.tab}&format=jsonl&${params()}`;
+});
+$("clear").addEventListener("click", async () => { await fetch("/api/reset", { method: "POST" }); refresh(); });
+$("auto").addEventListener("change", schedule);
+
+function schedule() {
+  clearInterval(state.timer);
+  if ($("auto").checked) state.timer = setInterval(refresh, 3000);
+}
+schedule();
+refresh();
+</script>
+</body>
+</html>
