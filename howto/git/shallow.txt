@@ -1,0 +1,10 @@
+# Q: git shallow, remove all prev versions, keep only the tip
+
+# 1. Fetch only the absolute latest commit, severing the history chain
+git fetch --depth 1
+
+# 2. Force your current branch to point to that single remote commit
+git reset --hard @{u}
+
+# 3. Aggressively purge and delete all old, unreferenced history from your disk
+git reflog expire --expire=now --all && git gc --prune=now --aggressive
