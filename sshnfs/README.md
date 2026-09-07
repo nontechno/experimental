@@ -76,9 +76,9 @@ honoured, with the usual `%h`/`%p`/`%r`/`%d` token expansion:
 `HostName`, `Port`, `User`, `IdentityFile` (repeatable), `UserKnownHostsFile`,
 `StrictHostKeyChecking`, `ConnectTimeout`, `ServerAliveInterval`.
 
-Anything else in the file — `ProxyJump`, `ProxyCommand`, `ControlMaster`,
-`ForwardAgent` — is ignored, so a host that only works through a jump host will
-not work here. The user file is read first, then `/etc/ssh/ssh_config`; the
+`ProxyJump` and `ProxyCommand` are honoured too — see below. Anything else in
+the file (`ControlMaster`, `ForwardAgent`, `RemoteCommand`) is ignored. The
+user file is read first, then `/etc/ssh/ssh_config`; the
 first file to define a keyword wins, as in ssh. `Include` and `Host` patterns
 (`build*`, `!except`) work.
 
@@ -87,6 +87,58 @@ file key always wins. `IdentityFile` entries that do not exist on disk are
 skipped rather than failing the connection. Use `-F path` to read a different
 file (a path that does not exist is an error, unlike the default location) and
 `-use-ssh-config=false` to ignore it entirely.
+
+## Jump hosts and proxy commands
+
+A bastion works the way it does with ssh:
+
+```sh
+# one hop
+sshnfs -J bastion me@internal:/srv/data ~/mnt/data
+
+# a chain, innermost last
+sshnfs -J jump1,user@jump2:2222 me@internal:/srv/data ~/mnt/data
+
+# anything that speaks the connection on stdin/stdout
+sshnfs -proxy-command "cloudflared access ssh --hostname %h" me@internal:/srv
+```
+
+or in the config file, as `proxy_jump` and `proxy_command`.
+
+Each hop is dialed through the one before it and its handshake runs over a
+channel on that connection — no local port forwarding, no external `ssh`
+process. A hop is itself looked up in `~/.ssh/config`, so `-J bastion` picks up
+the `HostName`, `Port`, `User` and `IdentityFile` you already have for
+`bastion`; anything still missing falls back to the target's own settings.
+Host keys for every hop are checked against the same `known_hosts` file.
+
+A jump host may have proxy settings of its own, and they are expanded in place.
+Given
+
+```
+Host edge     { HostName … }
+Host bastion  { ProxyJump edge }
+Host inner    { ProxyJump bastion }
+```
+
+`sshnfs inner:/srv/data` dials `edge`, then `bastion` through `edge`, then
+`inner` through `bastion` — one flat chain, nothing to spell out. A hop whose
+config gives it a `ProxyCommand` instead is reached with that command, provided
+nothing precedes it in the chain; if something does, the chain wins and the
+command is skipped (logged at debug). Cycles are reported rather than followed,
+chains are capped at eight hops and nesting at eight levels.
+
+`ProxyCommand` runs through `/bin/sh` with the usual `%h`, `%p` and `%r` tokens
+expanded, and its stderr is surfaced in the log — that output is usually the
+only clue when a jump fails. Note that this means a config file can execute an
+arbitrary shell command, exactly as ssh's own does.
+
+If both are set, `ProxyJump` wins and `proxy_command` is dropped. Either may be
+`"none"` to switch off a value inherited from the enclosing config or from
+`~/.ssh/config`.
+
+Reconnection rebuilds the entire chain, and the jump connections are torn down
+with the session rather than leaking.
 
 ## Reconnection
 
@@ -148,6 +200,7 @@ See `config.example.json`. Selected options:
 | `-host`, `-port`, `-user`, `-remote` | `host`, `port`, `user`, `remote_path` | what to export |
 | `-name` | `name` | label for this mount in logs |
 | `-F`, `-use-ssh-config` | `ssh_config_file`, `use_ssh_config` | ssh client config lookup |
+| `-J`, `-proxy-command` | `proxy_jump`, `proxy_command` | reach the host through a bastion |
 | `-reconnect`, `-reconnect-delay`, `-reconnect-max-delay`, `-reconnect-attempts` | `reconnect`, … | background reconnection |
 | `-i`, `-passphrase`, `-ask-password` | `identity_files`, … | authentication |
 | `-agent` | `use_agent` | use `$SSH_AUTH_SOCK` (default on) |
@@ -257,6 +310,10 @@ concurrent load. `features_test.go` covers alias resolution and precedence
 against a real `ssh_config`, connecting through an alias, background reconnect
 after the transport is killed, giving up after the attempt limit, and two
 mounts serving different roots with independent read-only settings.
+`proxy_test.go` runs real one- and two-hop `ProxyJump` chains and a
+`ProxyCommand` against the test sshd, and checks that failures name the hop,
+that a stalled proxy command still times out, and that reconnection rebuilds
+the chain.
 
 ```sh
 # against any sshd you can key into on 127.0.0.1:2222

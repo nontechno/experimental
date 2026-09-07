@@ -1,4 +1,4 @@
-module sshnfs
+module github.com/example/sshnfs
 
 go 1.22
 

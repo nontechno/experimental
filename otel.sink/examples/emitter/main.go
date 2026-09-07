@@ -127,8 +127,7 @@ func iterate(
 		span.SetStatus(codes.Error, "checkout failed")
 		logger.ErrorContext(ctx, "payment declined", "order.id", 1000+n, "error", err)
 	}
-	payment.AddEvent("authorization.result", trace.WithAttributes(
-		attribute.Bool("approved", !failed)))
+	payment.AddEvent("authorization.result", trace.WithAttributes(attribute.Bool("approved", !failed)))
 	payment.End()
 
 	status := attribute.String("status", "ok")
@@ -136,16 +135,16 @@ func iterate(
 		status = attribute.String("status", "declined")
 	}
 	orders.Add(ctx, 1, metric.WithAttributes(status, region))
-	latency.Record(ctx, float64(time.Since(start).Microseconds())/1000.0,
-		metric.WithAttributes(region))
-	logger.InfoContext(ctx, "checkout finished",
-		"order.id", 1000+n, "duration_ms", time.Since(start).Milliseconds())
+	latency.Record(ctx, float64(time.Since(start).Microseconds())/1000.0, metric.WithAttributes(region))
+	logger.InfoContext(ctx, "checkout finished", "order.id", 1000+n, "duration_ms", time.Since(start).Milliseconds())
 }
 
 func work(ctx context.Context, tracer trace.Tracer, name string, d time.Duration) {
 	_, span := tracer.Start(ctx, name)
 	defer span.End()
 	time.Sleep(d + time.Duration(rand.Intn(10))*time.Millisecond)
+	span.AddEvent("aaaaaa")
+	span.SetName("nameeeeeeeeeeee")
 }
 
 // setup wires the three SDK providers to OTLP/gRPC exporters and returns a
@@ -168,8 +167,7 @@ func setup(ctx context.Context, endpoint, service string) (func(context.Context)
 		return nil, fmt.Errorf("build resource: %w", err)
 	}
 
-	traceExp, err := otlptracegrpc.New(ctx,
-		otlptracegrpc.WithEndpoint(endpoint), otlptracegrpc.WithInsecure())
+	traceExp, err := otlptracegrpc.New(ctx, otlptracegrpc.WithEndpoint(endpoint), otlptracegrpc.WithInsecure())
 	if err != nil {
 		return nil, err
 	}
@@ -191,8 +189,7 @@ func setup(ctx context.Context, endpoint, service string) (func(context.Context)
 	)
 	otel.SetMeterProvider(mp)
 
-	logExp, err := otlploggrpc.New(ctx,
-		otlploggrpc.WithEndpoint(endpoint), otlploggrpc.WithInsecure())
+	logExp, err := otlploggrpc.New(ctx, otlploggrpc.WithEndpoint(endpoint), otlploggrpc.WithInsecure())
 	if err != nil {
 		return nil, err
 	}
@@ -203,6 +200,9 @@ func setup(ctx context.Context, endpoint, service string) (func(context.Context)
 	global.SetLoggerProvider(lp)
 
 	return func(ctx context.Context) error {
-		return errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx), lp.Shutdown(ctx))
+		return errors.Join(
+			tp.Shutdown(ctx),
+			mp.Shutdown(ctx),
+			lp.Shutdown(ctx))
 	}, nil
 }

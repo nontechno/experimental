@@ -117,6 +117,14 @@ type Config struct {
 	UseSSHConfig  bool   `json:"use_ssh_config"`
 	SSHConfigFile string `json:"ssh_config_file"`
 
+	// ----- reaching the host through something else -----
+	// ProxyJump is a comma separated list of [user@]host[:port] hops, like
+	// ssh -J. ProxyCommand is a shell command whose stdin/stdout carry the
+	// connection, like ssh's ProxyCommand. Either may be "none" to disable an
+	// inherited value; ProxyJump wins if both are set.
+	ProxyJump    string `json:"proxy_jump"`
+	ProxyCommand string `json:"proxy_command"`
+
 	// ----- ssh / sftp tuning -----
 	ConnectTimeout Duration `json:"connect_timeout"`
 	KeepAlive      Duration `json:"keepalive_interval"`
@@ -154,6 +162,7 @@ type Config struct {
 	Mounts []*Config `json:"mounts,omitempty"`
 
 	// not serialised
+	jumpHops      []*endpoint     // resolved from ProxyJump
 	alias         string          // the ~/.ssh/config alias, when Host was one
 	explicit      map[string]bool // json keys the user set by hand
 	rawMounts     []json.RawMessage
@@ -229,6 +238,8 @@ var flagKeys = map[string]string{
 	"connect-timeout": "connect_timeout",
 	"keepalive":       "keepalive_interval",
 	"F":               "ssh_config_file",
+	"J":               "proxy_jump",
+	"proxy-command":   "proxy_command",
 }
 
 func (c *Config) markExplicit(key string) {
@@ -262,6 +273,9 @@ func (c *Config) bind(fs *flag.FlagSet) {
 
 	fs.BoolVar(&c.UseSSHConfig, "use-ssh-config", c.UseSSHConfig, "read host settings from ~/.ssh/config")
 	fs.StringVar(&c.SSHConfigFile, "F", c.SSHConfigFile, "ssh client config file to consult")
+
+	fs.StringVar(&c.ProxyJump, "J", c.ProxyJump, "jump hosts to reach the target through: [user@]host[:port][,...]")
+	fs.StringVar(&c.ProxyCommand, "proxy-command", c.ProxyCommand, "shell command whose stdin/stdout carry the connection")
 
 	fs.Var(&c.ConnectTimeout, "connect-timeout", "ssh connect, handshake and subsystem timeout")
 	fs.Var(&c.KeepAlive, "keepalive", "ssh keepalive interval (0 disables)")
@@ -601,6 +615,22 @@ func (c *Config) validate() error {
 	}
 	if !c.InsecureHostKey && c.KnownHostsFile == "" {
 		return fmt.Errorf("either -known-hosts or -insecure is required")
+	}
+	if len(c.jumpHops) > 0 && c.ProxyCommand != "" && !isNone(c.ProxyCommand) {
+		// Matching ssh, where the first obtained value wins; say so rather
+		// than silently ignoring one of them.
+		c.ProxyCommand = ""
+	}
+	for _, h := range c.jumpHops {
+		if h.Host == "" {
+			return fmt.Errorf("proxy_jump %q: a hop has no host", c.ProxyJump)
+		}
+		if h.Port <= 0 || h.Port > 65535 {
+			return fmt.Errorf("proxy_jump %q: invalid port %d for %s", c.ProxyJump, h.Port, h.Host)
+		}
+		if h.User == "" {
+			return fmt.Errorf("proxy_jump %q: no user for %s", c.ProxyJump, h.Host)
+		}
 	}
 	if c.ReconnectDelay < 0 || c.ReconnectMaxDelay < 0 {
 		return fmt.Errorf("reconnect delays must not be negative")

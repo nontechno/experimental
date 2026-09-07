@@ -30,6 +30,7 @@ type Conn struct {
 	mu           sync.Mutex
 	ssh          *ssh.Client
 	sftp         *sftp.Client
+	extra        []io.Closer // jump-host clients owned by this session
 	gen          uint64
 	closed       bool
 	lastFail     time.Time
@@ -103,7 +104,7 @@ func (c *Conn) connect(ignoreBackoff bool) (*sftp.Client, uint64, error) {
 	reconnect := c.gen > 0
 	c.mu.Unlock()
 
-	sshClient, sftpClient, err := c.dial()
+	sshClient, sftpClient, extra, err := c.dial()
 	if err != nil {
 		c.mu.Lock()
 		c.lastFail, c.lastErr = time.Now(), err
@@ -116,9 +117,10 @@ func (c *Conn) connect(ignoreBackoff bool) (*sftp.Client, uint64, error) {
 		c.mu.Unlock()
 		sftpClient.Close()
 		sshClient.Close()
+		closeAll(extra)
 		return nil, 0, errors.New("connection closed")
 	}
-	c.ssh, c.sftp = sshClient, sftpClient
+	c.ssh, c.sftp, c.extra = sshClient, sftpClient, extra
 	c.lastErr = nil
 	c.gen++
 	gen := c.gen
@@ -142,8 +144,8 @@ func (c *Conn) Invalidate(gen uint64) {
 		c.mu.Unlock()
 		return
 	}
-	sftpClient, sshClient := c.sftp, c.ssh
-	c.sftp, c.ssh = nil, nil
+	sftpClient, sshClient, extra := c.sftp, c.ssh, c.extra
+	c.sftp, c.ssh, c.extra = nil, nil, nil
 	c.mu.Unlock()
 
 	if c.cfg.Reconnect {
@@ -157,6 +159,7 @@ func (c *Conn) Invalidate(gen uint64) {
 	if sshClient != nil {
 		sshClient.Close()
 	}
+	closeAll(extra)
 	c.scheduleReconnect()
 }
 
@@ -223,8 +226,8 @@ func (c *Conn) Close() error {
 	c.closeOnce.Do(func() { close(c.done) })
 	c.mu.Lock()
 	c.closed = true
-	sftpClient, sshClient := c.sftp, c.ssh
-	c.sftp, c.ssh = nil, nil
+	sftpClient, sshClient, extra := c.sftp, c.ssh, c.extra
+	c.sftp, c.ssh, c.extra = nil, nil, nil
 	c.mu.Unlock()
 
 	var err error
@@ -236,7 +239,15 @@ func (c *Conn) Close() error {
 			err = e
 		}
 	}
+	closeAll(extra)
 	return err
+}
+
+// closeAll shuts down jump-host clients in reverse order, innermost first.
+func closeAll(closers []io.Closer) {
+	for i := len(closers) - 1; i >= 0; i-- {
+		closers[i].Close()
+	}
 }
 
 // watch keeps the transport alive and notices a dead peer promptly.
@@ -268,55 +279,25 @@ func (c *Conn) watch(sshClient *ssh.Client, sftpClient *sftp.Client, gen uint64)
 	}
 }
 
-func (c *Conn) dial() (*ssh.Client, *sftp.Client, error) {
-	auths, err := c.authMethods()
-	if err != nil {
-		return nil, nil, err
-	}
-	hostKey, err := c.hostKeyCallback()
-	if err != nil {
-		return nil, nil, err
-	}
+func (c *Conn) dial() (*ssh.Client, *sftp.Client, []io.Closer, error) {
+	target := c.cfg.target()
+	timeout := target.ConnectTimeout
 
-	clientCfg := &ssh.ClientConfig{
-		User:            c.cfg.User,
-		Auth:            auths,
-		HostKeyCallback: hostKey,
-		Timeout:         c.cfg.ConnectTimeout.D(),
-	}
-
-	c.log.Debugf("dialing %s@%s", c.cfg.User, c.cfg.Addr())
-	addr := c.cfg.Addr()
-	timeout := c.cfg.ConnectTimeout.D()
-
-	// ssh.ClientConfig.Timeout covers only the TCP connect, so a host that
-	// accepts and then stalls would block here forever. Drive the connection
-	// ourselves and put a deadline on the handshake and the subsystem start.
-	nc, err := net.DialTimeout("tcp", addr, timeout)
+	nc, extra, err := c.dialTransport(target)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssh dial %s: %w", addr, err)
+		return nil, nil, nil, err
 	}
-	if timeout > 0 {
-		if err := nc.SetDeadline(time.Now().Add(timeout)); err != nil {
-			nc.Close()
-			return nil, nil, err
+	closeExtra := func() {
+		for i := len(extra) - 1; i >= 0; i-- {
+			extra[i].Close()
 		}
 	}
 
-	sshConn, chans, reqs, err := ssh.NewClientConn(nc, addr, clientCfg)
+	sshClient, err := c.handshake(nc, target, timeout)
 	if err != nil {
 		nc.Close()
-		return nil, nil, fmt.Errorf("ssh handshake %s: %w", addr, err)
-	}
-	sshClient := ssh.NewClient(sshConn, chans, reqs)
-
-	// Give the subsystem start its own budget rather than whatever is left of
-	// the handshake's.
-	if timeout > 0 {
-		if err := nc.SetDeadline(time.Now().Add(timeout)); err != nil {
-			sshClient.Close()
-			return nil, nil, err
-		}
+		closeExtra()
+		return nil, nil, nil, err
 	}
 
 	opts := []sftp.ClientOption{
@@ -326,27 +307,167 @@ func (c *Conn) dial() (*ssh.Client, *sftp.Client, error) {
 		sftp.UseConcurrentWrites(true),
 		sftp.UseFstat(true),
 	}
-	sftpClient, err := sftp.NewClient(sshClient, opts...)
+	var sftpClient *sftp.Client
+	err = withTimeout(nc, timeout, func() error {
+		var e error
+		sftpClient, e = sftp.NewClient(sshClient, opts...)
+		return e
+	})
 	if err != nil {
 		sshClient.Close()
-		return nil, nil, fmt.Errorf("start sftp subsystem: %w", err)
+		closeExtra()
+		return nil, nil, nil, fmt.Errorf("start sftp subsystem: %w", err)
 	}
-	// Clear the deadline before any real traffic; from here on the keepalive
-	// is what notices a dead peer.
-	if timeout > 0 {
-		if err := nc.SetDeadline(time.Time{}); err != nil {
-			sftpClient.Close()
-			sshClient.Close()
-			return nil, nil, err
-		}
-	}
-	return sshClient, sftpClient, nil
+	return sshClient, sftpClient, extra, nil
 }
 
-func (c *Conn) authMethods() ([]ssh.AuthMethod, error) {
+// dialTransport produces the connection the target's SSH handshake runs over:
+// a plain TCP connection, a channel on the last ProxyJump hop, or the pipes of
+// a ProxyCommand. The returned closers own anything that must outlive the dial
+// and be shut down with the session.
+func (c *Conn) dialTransport(target *endpoint) (net.Conn, []io.Closer, error) {
+	switch {
+	case len(c.cfg.jumpHops) > 0:
+		return c.dialThroughJumps(target)
+	case c.cfg.ProxyCommand != "" && !isNone(c.cfg.ProxyCommand):
+		conn, err := dialProxyCommand(c.cfg.ProxyCommand, target, c.log)
+		if err != nil {
+			return nil, nil, err
+		}
+		return conn, nil, nil
+	default:
+		c.log.Debugf("dialing %s@%s", target.User, target.Addr())
+		nc, err := net.DialTimeout("tcp", target.Addr(), target.ConnectTimeout)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ssh dial %s: %w", target.Addr(), err)
+		}
+		return nc, nil, nil
+	}
+}
+
+// dialThroughJumps walks the ProxyJump chain, each hop dialed through the one
+// before it, and returns a connection to the target opened by the last hop.
+func (c *Conn) dialThroughJumps(target *endpoint) (net.Conn, []io.Closer, error) {
+	var (
+		clients []*ssh.Client
+		extra   []io.Closer
+	)
+	fail := func(err error) (net.Conn, []io.Closer, error) {
+		for i := len(clients) - 1; i >= 0; i-- {
+			clients[i].Close()
+		}
+		return nil, nil, err
+	}
+
+	for i, hop := range c.cfg.jumpHops {
+		var (
+			nc  net.Conn
+			err error
+		)
+		switch {
+		case i == 0 && hop.ProxyCommand != "":
+			// The first link has no predecessor to tunnel through, so a
+			// ProxyCommand of its own can be run locally to reach it.
+			c.log.Debugf("dialing jump host %s@%s through its proxy command", hop.User, hop.Addr())
+			nc, err = dialProxyCommand(hop.ProxyCommand, hop, c.log)
+			if err != nil {
+				return fail(fmt.Errorf("jump host %s: %w", hop.Addr(), err))
+			}
+		case i == 0:
+			c.log.Debugf("dialing jump host %s@%s", hop.User, hop.Addr())
+			nc, err = net.DialTimeout("tcp", hop.Addr(), hop.ConnectTimeout)
+			if err != nil {
+				return fail(fmt.Errorf("jump host %s: %w", hop.Addr(), err))
+			}
+		default:
+			if hop.ProxyCommand != "" {
+				// Its predecessor in the chain already determines how we get
+				// there; running the command as well would bypass the chain.
+				c.log.Debugf("ignoring the proxy command for %s: it is reached through %s",
+					hop.Addr(), c.cfg.jumpHops[i-1].Addr())
+			}
+			c.log.Debugf("dialing jump host %s@%s through %s", hop.User, hop.Addr(), c.cfg.jumpHops[i-1].Addr())
+			prev := clients[i-1]
+			err = withTimeout(prev, hop.ConnectTimeout, func() error {
+				var e error
+				nc, e = prev.Dial("tcp", hop.Addr())
+				return e
+			})
+			if err != nil {
+				return fail(fmt.Errorf("jump host %s via %s: %w", hop.Addr(), c.cfg.jumpHops[i-1].Addr(), err))
+			}
+		}
+		client, err := c.handshake(nc, hop, hop.ConnectTimeout)
+		if err != nil {
+			nc.Close()
+			return fail(fmt.Errorf("jump host %s: %w", hop.Addr(), err))
+		}
+		clients = append(clients, client)
+	}
+
+	last := clients[len(clients)-1]
+	lastHop := c.cfg.jumpHops[len(c.cfg.jumpHops)-1]
+	var conn net.Conn
+	err := withTimeout(last, target.ConnectTimeout, func() error {
+		var e error
+		conn, e = last.Dial("tcp", target.Addr())
+		return e
+	})
+	if err != nil {
+		return fail(fmt.Errorf("connect to %s from jump host %s: %w", target.Addr(), lastHop.Addr(), err))
+	}
+	// The jump clients must stay up for as long as the session does.
+	for _, cl := range clients {
+		extra = append(extra, cl)
+	}
+	return conn, extra, nil
+}
+
+// handshake runs the SSH client handshake over an established transport.
+func (c *Conn) handshake(nc net.Conn, e *endpoint, timeout time.Duration) (*ssh.Client, error) {
+	clientCfg, err := c.clientConfig(e)
+	if err != nil {
+		return nil, err
+	}
+	var client *ssh.Client
+	err = withTimeout(nc, timeout, func() error {
+		// ssh.ClientConfig.Timeout only covers a TCP connect, and connections
+		// from a jump host or a ProxyCommand have no deadline support at all,
+		// so withTimeout is what bounds this.
+		sshConn, chans, reqs, e := ssh.NewClientConn(nc, e.Addr(), clientCfg)
+		if e != nil {
+			return e
+		}
+		client = ssh.NewClient(sshConn, chans, reqs)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ssh handshake %s: %w", e.Addr(), err)
+	}
+	return client, nil
+}
+
+func (c *Conn) clientConfig(e *endpoint) (*ssh.ClientConfig, error) {
+	auths, err := c.authMethods(e)
+	if err != nil {
+		return nil, err
+	}
+	hostKey, err := c.hostKeyCallback(e)
+	if err != nil {
+		return nil, err
+	}
+	return &ssh.ClientConfig{
+		User:            e.User,
+		Auth:            auths,
+		HostKeyCallback: hostKey,
+		Timeout:         e.ConnectTimeout,
+	}, nil
+}
+
+func (c *Conn) authMethods(e *endpoint) ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
 
-	if c.cfg.UseAgent {
+	if e.UseAgent {
 		if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 			if conn, err := net.Dial("unix", sock); err == nil {
 				methods = append(methods, ssh.PublicKeysCallback(agent.NewClient(conn).Signers))
@@ -357,10 +478,11 @@ func (c *Conn) authMethods() ([]ssh.AuthMethod, error) {
 		}
 	}
 
-	for _, path := range c.identityFiles() {
-		signer, err := loadPrivateKey(path, c.cfg.IdentityPassphrase)
+	explicitKeys := len(e.IdentityFiles) > 0
+	for _, path := range identityFiles(e) {
+		signer, err := loadPrivateKey(path, e.Passphrase)
 		if err != nil {
-			if len(c.cfg.IdentityFiles) > 0 {
+			if explicitKeys {
 				// Explicitly requested: a failure here is fatal.
 				return nil, err
 			}
@@ -371,14 +493,16 @@ func (c *Conn) authMethods() ([]ssh.AuthMethod, error) {
 		methods = append(methods, ssh.PublicKeys(signer))
 	}
 
-	password := c.cfg.Password
-	if password == "" && c.cfg.AskPassword {
-		p, err := promptPassword(fmt.Sprintf("%s@%s password: ", c.cfg.User, c.cfg.Host))
+	password := e.Password
+	if password == "" && e.AskPassword {
+		p, err := promptPassword(fmt.Sprintf("%s@%s password: ", e.User, e.Host))
 		if err != nil {
 			return nil, err
 		}
 		password = p
-		c.cfg.Password = p // reuse it when reconnecting
+		if e.Host == c.cfg.Host {
+			c.cfg.Password = p // reuse it when reconnecting
+		}
 	}
 	if password != "" {
 		methods = append(methods,
@@ -394,15 +518,15 @@ func (c *Conn) authMethods() ([]ssh.AuthMethod, error) {
 	}
 
 	if len(methods) == 0 {
-		return nil, errors.New("no usable ssh authentication method (try -i, -agent or -ask-password)")
+		return nil, fmt.Errorf("no usable ssh authentication method for %s (try -i, -agent or -ask-password)", e.Addr())
 	}
 	return methods, nil
 }
 
-func (c *Conn) identityFiles() []string {
-	if len(c.cfg.IdentityFiles) > 0 {
-		out := make([]string, 0, len(c.cfg.IdentityFiles))
-		for _, p := range c.cfg.IdentityFiles {
+func identityFiles(e *endpoint) []string {
+	if len(e.IdentityFiles) > 0 {
+		out := make([]string, 0, len(e.IdentityFiles))
+		for _, p := range e.IdentityFiles {
 			out = append(out, expandUser(p))
 		}
 		return out
@@ -452,12 +576,12 @@ func loadPrivateKey(path, passphrase string) (ssh.Signer, error) {
 	return nil, fmt.Errorf("parse key %s: %w", path, err)
 }
 
-func (c *Conn) hostKeyCallback() (ssh.HostKeyCallback, error) {
-	if c.cfg.InsecureHostKey {
-		c.log.Warnf("host key verification disabled")
+func (c *Conn) hostKeyCallback(e *endpoint) (ssh.HostKeyCallback, error) {
+	if e.Insecure {
+		c.log.Warnf("host key verification disabled for %s", e.Host)
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
-	path := expandUser(c.cfg.KnownHostsFile)
+	path := expandUser(e.KnownHostsFile)
 	cb, err := knownhosts.New(path)
 	if err != nil {
 		return nil, fmt.Errorf("known_hosts %s: %w (use -known-hosts or -insecure)", path, err)
@@ -467,7 +591,7 @@ func (c *Conn) hostKeyCallback() (ssh.HostKeyCallback, error) {
 			var kerr *knownhosts.KeyError
 			if errors.As(err, &kerr) && len(kerr.Want) == 0 {
 				return fmt.Errorf("host %s is not in %s; add it with: ssh-keyscan -p %d %s >> %s",
-					hostname, path, c.cfg.Port, c.cfg.Host, path)
+					hostname, path, e.Port, e.Host, path)
 			}
 			return err
 		}

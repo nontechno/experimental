@@ -120,15 +120,18 @@ func shortLocalHostname() string {
 // StrictHostKeyChecking, ConnectTimeout and ServerAliveInterval. Anything else
 // in the file (ProxyJump, ProxyCommand, ControlMaster, …) is ignored.
 func (c *Config) applySSHConfig() error {
-	if !c.UseSSHConfig || c.Host == "" {
-		return nil
-	}
-	set, err := loadSSHConfig(c.SSHConfigFile, c.isExplicit("ssh_config_file"))
-	if err != nil {
-		return err
+	var (
+		set *sshConfigSet
+		err error
+	)
+	if c.UseSSHConfig && c.Host != "" {
+		if set, err = loadSSHConfig(c.SSHConfigFile, c.isExplicit("ssh_config_file")); err != nil {
+			return err
+		}
 	}
 	if set == nil {
-		return nil
+		// Still resolve a ProxyJump given by flag or config file.
+		return c.resolveProxy(nil)
 	}
 
 	alias := c.Host
@@ -205,6 +208,17 @@ func (c *Config) applySSHConfig() error {
 		}
 	}
 
+	if !c.isExplicit("proxy_jump") {
+		if v := set.get(alias, "ProxyJump"); v != "" {
+			c.ProxyJump = v
+		}
+	}
+	if !c.isExplicit("proxy_command") {
+		if v := set.get(alias, "ProxyCommand"); v != "" {
+			c.ProxyCommand = expandSSHTokens(v, alias, host, c.User, c.Port)
+		}
+	}
+
 	if !c.isExplicit("connect_timeout") {
 		if d, ok := sshSeconds(set.get(alias, "ConnectTimeout")); ok {
 			c.ConnectTimeout = Duration(d)
@@ -215,6 +229,138 @@ func (c *Config) applySSHConfig() error {
 			c.KeepAlive = Duration(d)
 		}
 	}
+	return c.resolveProxy(set)
+}
+
+// maxJumpHops and maxJumpDepth bound both the chain and the recursion used to
+// expand it, so a mistyped config cannot spin forever.
+const (
+	maxJumpHops  = 8
+	maxJumpDepth = 8
+)
+
+// resolveProxy turns the ProxyJump string into fully specified hops. Each hop
+// is itself looked up in ssh config, so "-J bastion" picks up the HostName,
+// Port, User and IdentityFile you already have for "bastion"; whatever is
+// still missing falls back to the target's own settings. A hop that has its
+// own ProxyJump is expanded in place, which is how a bastion behind another
+// bastion works without spelling out the whole chain.
+func (c *Config) resolveProxy(set *sshConfigSet) error {
+	if isNone(c.ProxyJump) {
+		c.ProxyJump, c.jumpHops = "", nil
+		if isNone(c.ProxyCommand) {
+			c.ProxyCommand = ""
+		}
+		return nil
+	}
+	if isNone(c.ProxyCommand) {
+		c.ProxyCommand = ""
+	}
+	hops, err := c.expandJumpSpec(set, c.ProxyJump, nil, 0)
+	if err != nil {
+		return err
+	}
+	if len(hops) > maxJumpHops {
+		return fmt.Errorf("proxy_jump %q: %d hops, more than the %d supported", c.ProxyJump, len(hops), maxJumpHops)
+	}
+	c.jumpHops = hops
+	return nil
+}
+
+// expandJumpSpec parses a jump list and resolves every entry, recursing into
+// each hop's own ProxyJump. path carries the aliases already being expanded so
+// a cycle is reported rather than followed.
+func (c *Config) expandJumpSpec(set *sshConfigSet, spec string, path []string, depth int) ([]*endpoint, error) {
+	if depth > maxJumpDepth {
+		return nil, fmt.Errorf("proxy jump %q: nested more than %d deep", spec, maxJumpDepth)
+	}
+	parsed, err := parseJumpSpec(spec)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []*endpoint
+	for _, hop := range parsed {
+		alias := hop.Host
+		for _, seen := range path {
+			if seen == alias {
+				return nil, fmt.Errorf("proxy jump: %s is reached through itself (%s)",
+					alias, strings.Join(append(path, alias), " -> "))
+			}
+		}
+
+		// The hop's own proxy settings decide how we get to it.
+		if nested := set.get(alias, "ProxyJump"); nested != "" && !isNone(nested) {
+			sub, err := c.expandJumpSpec(set, nested, append(append([]string{}, path...), alias), depth+1)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, sub...)
+		} else if pc := set.get(alias, "ProxyCommand"); pc != "" && !isNone(pc) {
+			hop.ProxyCommand = pc
+		}
+
+		if err := c.fillHop(set, alias, hop); err != nil {
+			return nil, err
+		}
+		out = append(out, hop)
+		if len(out) > maxJumpHops {
+			return nil, fmt.Errorf("proxy jump %q: more than %d hops", spec, maxJumpHops)
+		}
+	}
+	return out, nil
+}
+
+// fillHop completes one hop from ssh config, then from the target's settings.
+func (c *Config) fillHop(set *sshConfigSet, alias string, hop *endpoint) error {
+	if hop.User == "" {
+		if v := set.get(alias, "User"); v != "" {
+			hop.User = v
+		}
+	}
+	if hop.Port == 0 {
+		if v := set.get(alias, "Port"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 || n > 65535 {
+				return fmt.Errorf("ssh config: invalid Port %q for jump host %s", v, alias)
+			}
+			hop.Port = n
+		}
+	}
+	if v := set.get(alias, "HostName"); v != "" {
+		hop.Host = expandSSHTokens(v, alias, alias, hop.User, hop.Port)
+	}
+	for _, id := range set.getAll(alias, "IdentityFile") {
+		p := expandUser(expandSSHTokens(id, alias, hop.Host, hop.User, hop.Port))
+		if _, err := os.Stat(p); err == nil {
+			hop.IdentityFiles = append(hop.IdentityFiles, p)
+		}
+	}
+	if strings.EqualFold(set.get(alias, "StrictHostKeyChecking"), "no") {
+		hop.Insecure = true
+	}
+
+	// Fall back to the target's settings for anything ssh config did not
+	// answer, which is what makes "-J bastion" work with no extra setup.
+	if hop.User == "" {
+		hop.User = c.User
+	}
+	if hop.Port == 0 {
+		hop.Port = 22
+	}
+	if len(hop.IdentityFiles) == 0 {
+		hop.IdentityFiles = c.IdentityFiles
+	}
+	if hop.ProxyCommand != "" {
+		hop.ProxyCommand = expandSSHTokens(hop.ProxyCommand, alias, hop.Host, hop.User, hop.Port)
+	}
+	hop.Passphrase = c.IdentityPassphrase
+	hop.UseAgent = c.UseAgent
+	hop.KnownHostsFile = c.KnownHostsFile
+	if c.InsecureHostKey {
+		hop.Insecure = true
+	}
+	hop.ConnectTimeout = c.ConnectTimeout.D()
 	return nil
 }
 
