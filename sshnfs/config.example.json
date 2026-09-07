@@ -1,47 +1,47 @@
 {
-  "user": "sport",
-  "use_ssh_config": true,
-  "ssh_config_file": "~/.ssh/config",
-  "known_hosts_file": "~/.ssh/known_hosts",
-  "connect_timeout": "15s",
-  "keepalive_interval": "30s",
-  "max_packet": 32768,
-  "max_concurrent_requests": 64,
-  "reconnect": true,
-  "reconnect_delay": "5s",
-  "reconnect_max_delay": "1m",
-  "reconnect_max_attempts": 0,
-  "attr_cache_ttl": "1s",
-  "dir_cache_ttl": "1s",
-  "open_file_idle": "30s",
-  "open_file_limit": 64,
-  "uid": 501,
-  "gid": 20,
-  "mount_options": "vers=3,tcp,soft,intr,timeo=30,retrans=3,rsize=131072,wsize=131072,locallocks,noresvport,actimeo=1",
-  "mount_sudo": true,
-  "unmount_on_exit": true,
-  "log_level": "info",
-  "mounts": [
-    {
-      "name": "build",
-      "host": "buildhost",
-      "remote_path": "/srv/work",
-      "mount_point": "/Users/sport/mnt/build",
-      "listen": "127.0.0.1:0"
-    },
-    {
-      "name": "archive",
-      "host": "nas.example.com",
-      "port": 2222,
-      "user": "backup",
-      "identity_files": [
-        "~/.ssh/id_nas"
-      ],
-      "remote_path": "/volume1/archive",
-      "mount_point": "/Users/sport/mnt/archive",
-      "read_only": true,
-      "attr_cache_ttl": "30s",
-      "dir_cache_ttl": "30s"
-    }
-  ]
+	"user":			"sport",
+	"use_ssh_config":	true,
+	"ssh_config_file":	"~/.ssh/config",
+	"known_hosts_file":	"~/.ssh/known_hosts",
+	"connect_timeout":	"15s",
+	"keepalive_interval":	"30s",
+	"max_packet":		32768,
+	"max_concurrent_requests":	64,
+	"reconnect":		true,
+	"reconnect_delay":	"5s",
+	"reconnect_max_delay":	"1m",
+	"reconnect_max_attempts":	0,
+	"attr_cache_ttl":	"1s",
+	"dir_cache_ttl":	"1s",
+	"open_file_idle":	"30s",
+	"open_file_limit":	64,
+	"uid":			501,
+	"gid":			20,
+	"mount_options":	"vers=3,tcp,soft,intr,timeo=30,retrans=3,rsize=131072,wsize=131072,locallocks,noresvport,actimeo=1",
+	"mount_sudo":		true,
+	"unmount_on_exit":	true,
+	"log_level":	"	info",
+	"mounts": [
+		{
+			"name":		"build",
+			"host":		"buildhost",
+			"remote_path":	"/srv/work",
+			"mount_point":	"/Users/sport/mnt/build",
+			"listen":	"127.0.0.1:0"
+		},
+		{
+			"name":			"archive",
+			"host":			"nas.example.com",
+			"port":			2222,
+			"user":			"backup",
+			"identity_files": [
+				"~/.ssh/id_nas"
+			],
+			"remote_path":		"/volume1/archive",
+			"mount_point":		"/Users/sport/mnt/archive",
+			"read_only":		true,
+			"attr_cache_ttl":	"30s",
+			"dir_cache_ttl":	"30s"
+		}
+	]
 }
