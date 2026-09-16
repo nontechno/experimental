@@ -1,0 +1,7 @@
+{
+	"host": 		"hhh",
+	"remote_path":		"/remote/dir",
+	"mount_point":		"/local/dir",
+	"mount_sudo":		true,
+	"mount_options":	"vers=3,tcp,hard,intr,timeo=30,retrans=3,rsize=131072,wsize=131072,locallocks,noresvport,actimeo=1"
+}
