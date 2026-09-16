@@ -1,0 +1,33 @@
+# dbnfs configuration (HOCON subset — see README.md, "Configuration")
+#
+# Keep this file private: chmod 600 dbnfs.conf
+# dbnfs refuses to start if database.password is set and the file is
+# readable by group or others.
+
+database {
+    url                = "jdbc:oracle:thin:@//localhost:1521/FREEPDB1"
+    username           = "DBNFS_RO"
+    password           = "change-me"
+    # Instead of a literal password, read it from the environment:
+    # passwordEnv      = "DBNFS_PASSWORD"
+    authenticationType = "PASSWORD"
+    maxConnections     = 4
+}
+
+nfs {
+    # Loopback only by default. NFSv3 as served here has no authentication.
+    listen      = "127.0.0.1:12049"
+    allowRemote = false
+}
+
+export {
+    # Omit to export every schema that is not Oracle-maintained (12.1+).
+    schemas      = ["HR"]
+
+    maxRows      = 100        # rows in rows.csv; 0 removes rows.csv entirely
+    maxObjects   = 10000      # entries per directory listing
+    lobChars     = 1000       # CLOB/NCLOB prefix in rows.csv (0..1000)
+    maxFileBytes = 8388608    # hard cap on any generated file
+    cacheTTL     = "60s"      # how long listings and files are reused
+    queryTimeout = "30s"      # deadline for each database round trip
+}
