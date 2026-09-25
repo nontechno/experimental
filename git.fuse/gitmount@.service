@@ -1,0 +1,34 @@
+# Template unit: config is /etc/gitmount/<instance>.toml,
+# mountpoint is assumed to be /srv/<instance> (see ExecStopPost).
+#   systemctl enable --now gitmount@config-repo
+[Unit]
+Description=gitmount %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=gitmount
+Group=gitmount
+ExecStart=/usr/local/bin/gitmount -config /etc/gitmount/%i.toml
+Restart=on-failure
+RestartSec=10s
+# Covers unmount_timeout plus a final commit and push.
+TimeoutStopSec=5min
+KillMode=mixed
+# Clean up the mount point if the process was killed hard.
+ExecStopPost=-/usr/bin/fusermount3 -u -z /srv/%i
+
+# Optional (systemd >= 247, i.e. Oracle Linux 9): hand the token to the
+# service without making it readable by the gitmount user on disk.
+# Keep the source file root-owned, mode 0600, and set in the config:
+#   token_file = "/run/credentials/gitmount@<instance>.service/git-token"
+#LoadCredential=git-token:/etc/gitmount/%i.token
+
+# Do NOT add namespace sandboxing (PrivateTmp, ProtectSystem, ProtectHome,
+# PrivateMounts, ...): the mount would then exist only inside the service's
+# private mount namespace, invisible to everything else. NoNewPrivileges
+# also breaks the setuid fusermount3 helper that non-root mounts rely on.
+
+[Install]
+WantedBy=multi-user.target

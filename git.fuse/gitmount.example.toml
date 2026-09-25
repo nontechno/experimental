@@ -1,0 +1,76 @@
+# gitmount configuration. Unknown keys are rejected.
+# Durations use Go syntax: "500ms", "2s", "1m30s".
+
+[repo]
+# ssh://host/path, user@host:path (scp style) or https://host/path.
+# Never put a password or token in the URL; use [auth] instead.
+url = "git@github.com:example/config-repo.git"
+# Must already exist on the remote.
+branch = "main"
+
+[mount]
+# Absolute path to an existing, empty directory.
+path = "/srv/config-repo"
+# Let users other than the service user access the mount. Requires
+# "user_allow_other" in /etc/fuse.conf when not running as root.
+# The kernel enforces normal permission bits (default_permissions).
+allow_other = false
+# How long the kernel may cache names and attributes. Upstream changes
+# become visible to open directory listings within this time.
+entry_timeout = "1s"
+attr_timeout = "1s"
+# Log every FUSE request (very verbose).
+debug = false
+
+[state]
+# Private directory holding the git metadata and the backing work tree.
+# One per mount. Must not be inside mount.path (or vice versa).
+dir = "/var/lib/gitmount/config-repo"
+
+[commit]
+author_name = "gitmount"
+author_email = "gitmount@example.com"
+# First line of each automatic commit; changed files are listed below it.
+message = "gitmount: automatic commit"
+# Commit after changes have been quiet this long and no file is open for writing.
+quiet_period = "2s"
+# Commit anyway once uncommitted changes are this old (e.g. a file held open).
+max_delay = "30s"
+
+[sync]
+# Push local commits (never forced). false = local-only commits.
+push = true
+# How often to fetch upstream changes. "0s" disables periodic fetches
+# (a fetch still happens after each commit).
+fetch_interval = "60s"
+# Upper bound for a single fetch or push.
+network_timeout = "2m"
+
+[auth]
+# "ssh", "token" (HTTPS basic auth) or "none" (public https).
+# Secret files must be mode 0600 (no group/other access) and are re-read
+# for every fetch/push, so keys and tokens can be rotated without restart.
+method = "ssh"
+
+# --- method = "ssh" ---
+# Private key (OpenSSH or PEM format). A read/write deploy key is ideal.
+ssh_key_file = "/var/lib/gitmount/.ssh/config-repo"
+# Only if the key is encrypted:
+# ssh_key_passphrase_file = "/etc/gitmount/config-repo.passphrase"
+# Required: the server's host key must be listed here. There is no option
+# to skip host key verification.
+known_hosts_file = "/var/lib/gitmount/.ssh/known_hosts"
+
+# --- method = "token" ---
+# username = "x-access-token"     # GitHub; GitLab accepts any name, e.g. "oauth2"
+# token_file = "/etc/gitmount/config-repo.token"
+# With systemd LoadCredential= (see gitmount@.service):
+# token_file = "/run/credentials/gitmount@config-repo.service/git-token"
+
+# Optional extra CA bundle (PEM) for an internal HTTPS server. The system
+# trust store is always used as well.
+# ca_bundle_file = "/etc/pki/tls/certs/internal-ca.pem"
+
+[shutdown]
+# On SIGTERM, retry a clean unmount this long, then detach lazily.
+unmount_timeout = "10s"
