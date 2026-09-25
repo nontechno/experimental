@@ -1,0 +1,29 @@
+# Bind loopback for local use. Use a private interface and allowed_clients
+# when mounting from other hosts; NFSv3 AUTH_NULL has no user authentication.
+listen_address: "127.0.0.1:2049"
+allowed_clients: []
+
+repository: "https://git.example.com/team/project.git"
+branch: "main"
+
+# Working files are exported at NFS path "/". Keep Git metadata outside the
+# exported directory. Both directories are created if they do not exist.
+work_directory: "/var/lib/gitnfs/work"
+git_directory: "/var/lib/gitnfs/git"
+
+# type: none for public repositories, https for token/basic credentials,
+# or ssh for a private key file.
+auth:
+  type: "https"
+  username: "git"
+  password: ""
+  token: "REPLACE_WITH_READ_WRITE_TOKEN"
+  ssh_user: "git"
+  private_key_file: ""
+  known_hosts_file: ""
+  passphrase: ""
+
+commit:
+  name: "Git NFS"
+  email: "gitnfs@example.com"
+  message: "Update via NFS"
