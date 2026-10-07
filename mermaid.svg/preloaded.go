@@ -11,7 +11,7 @@ import _ "embed"
 
 // mermaid.min.js
 //
-//go:embed embed/mermaid@11.15.0
+//go:embed embed/mermaid@12.1.0
 var mermaidJSSource string
 
 // pass mermaidJSSource directly to mermaidcdp.Config{JSSource: mermaidJSSource}
