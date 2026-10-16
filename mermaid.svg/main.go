@@ -20,6 +20,7 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/renderer/html"
 	"go.abhg.dev/goldmark/mermaid"
 	"go.abhg.dev/goldmark/mermaid/mermaidcdp"
 )
@@ -137,7 +138,10 @@ func renderMarkdownToHTML(ctx context.Context, compiler mermaid.Compiler, src []
 				Compiler:   compiler,
 			},
 		),
+		goldmark.WithRendererOptions(html.WithUnsafe()), // need this to render <details>/<summary> HTML tags
 	)
+
+	src = []byte(FixDetailsBlankLines(string(src)))
 
 	var body bytes.Buffer
 	if err := md.Convert(src, &body); err != nil {
