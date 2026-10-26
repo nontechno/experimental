@@ -21,7 +21,7 @@ func start() error {
 	showAMPM := flag.Bool("am-pm", true, "show AM/PM in 12-hour format")
 	zone := flag.String("zone", "", "IANA time zone, e.g. America/New_York (default: local)")
 	configPath := flag.String("config", "", "config file (default: ~/.config/clock/config.json)")
-	install := flag.Bool("install", false, "create default config if missing, then exit")
+	install := flag.Bool("install", false, "replace config with downloaded or built-in defaults, then exit")
 	edit := flag.Bool("edit", false, "open config in $VISUAL, $EDITOR, or vi, then exit")
 	flag.Parse()
 	if *configPath == "" {
@@ -32,15 +32,10 @@ func start() error {
 		*configPath = filepath.Join(home, ".config", "clock", "config.json")
 	}
 	if *install {
-		created, err := ensureConfig(*configPath)
-		if err != nil {
+		if err := installConfig(*configPath, os.Getenv("CONFIGURATION_ROOT"), os.Stderr); err != nil {
 			return fmt.Errorf("install: %w", err)
 		}
-		if created {
-			fmt.Println("Created config:", *configPath)
-		} else {
-			fmt.Println("Config already exists:", *configPath)
-		}
+		fmt.Println("Installed config:", *configPath)
 	}
 	if *edit {
 		if err := editConfig(*configPath); err != nil {

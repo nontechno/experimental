@@ -97,6 +97,22 @@ type displayLine struct {
 	text, color string
 }
 
+// Legacy horizontal values keep the display vertically centered.
+func parseAlignment(value string) (horizontal, vertical string, ok bool) {
+	switch value {
+	case "left", "center", "right":
+		return value, "middle", true
+	case "top", "middle", "bottom":
+		return "center", value, true
+	}
+	vertical, horizontal, found := strings.Cut(value, "-")
+	if found && (vertical == "top" || vertical == "middle" || vertical == "bottom") &&
+		(horizontal == "left" || horizontal == "center" || horizontal == "right") {
+		return horizontal, vertical, true
+	}
+	return "center", "middle", false
+}
+
 func render(now time.Time, opts options, width, height int) string {
 	if width < 1 || height < 1 {
 		return ""
@@ -143,7 +159,14 @@ func render(now time.Time, opts options, width, height int) string {
 	if opts.showHelp && height >= len(lines)+2 {
 		lines = append(lines, displayLine{}, displayLine{quitHelp, opts.helpColor})
 	}
+	horizontal, vertical, _ := parseAlignment(opts.alignment)
 	top := (height - len(lines)) / 2
+	switch vertical {
+	case "top":
+		top = 0
+	case "bottom":
+		top = height - len(lines)
+	}
 	screen := make([]string, height)
 	for i := range screen {
 		line := displayLine{}
@@ -155,10 +178,10 @@ func render(now time.Time, opts options, width, height int) string {
 			runes = runes[:width]
 		}
 		padding := (width - len(runes)) / 2
-		if opts.alignment == "left" {
+		if horizontal == "left" {
 			padding = 0
 		}
-		if opts.alignment == "right" {
+		if horizontal == "right" {
 			padding = width - len(runes)
 		}
 		screen[i] = opts.background + "\x1b[2K" + line.color + strings.Repeat(" ", padding) + string(runes)

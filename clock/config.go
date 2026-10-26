@@ -69,14 +69,18 @@ func ensureConfig(path string) (created bool, err error) {
 
 // loadConfig creates the default file on first use. Partial files inherit defaults.
 func loadConfig(path string) (config, error) {
-	cfg := defaultConfig()
 	if _, err := ensureConfig(path); err != nil {
-		return cfg, err
+		return config{}, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return cfg, err
+		return config{}, err
 	}
+	return decodeConfig(data)
+}
+
+func decodeConfig(data []byte) (config, error) {
+	cfg := defaultConfig()
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
@@ -99,8 +103,8 @@ func (cfg config) options() (options, error) {
 	if cfg.Scale < 0 || cfg.Scale > 4 {
 		return options{}, fmt.Errorf("scale must be 0 (automatic) or 1 through 4")
 	}
-	if cfg.Alignment != "left" && cfg.Alignment != "center" && cfg.Alignment != "right" {
-		return options{}, fmt.Errorf("alignment must be left, center, or right")
+	if _, _, ok := parseAlignment(cfg.Alignment); !ok {
+		return options{}, fmt.Errorf("alignment must be left, center, right, top, middle, bottom, or <top|middle|bottom>-<left|center|right>")
 	}
 	for _, r := range cfg.DateFormat {
 		if r < 32 || r == 127 {

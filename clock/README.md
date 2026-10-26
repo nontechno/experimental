@@ -12,7 +12,7 @@ go build -buildvcs=false -o clock .
 Press **q**, **Esc**, or **Ctrl+C** to exit. The clock restores the terminal and cursor on exit.
 
 ```sh
-./clock -install                # create default config; preserve an existing file
+./clock -install                # replace/create config with defaults
 ./clock -edit                   # open config in your editor, then exit
 ./clock -12                     # 12-hour format with AM/PM
 ./clock -12 -am-pm=false        # 12-hour format without AM/PM
@@ -26,7 +26,14 @@ The default is local time in 24-hour format, including seconds. For the full-siz
 
 On first launch, the app creates `~/.config/clock/config.json`. Edit it and restart the clock to apply changes. Missing settings use defaults; invalid settings and unknown keys produce an error. Explicit command-line flags override the file without changing it. Use `-config /path/to/config.json` to select another file.
 
-`-install` creates the config directory and default file without starting the clock. `-edit` also creates the file if missing, then opens it using `$VISUAL`, `$EDITOR`, or `vi`, in that order. Editor variables may include arguments (for example, `EDITOR='nano -w'`). The editor receives the terminal directly. Editing works even when the existing JSON is invalid. Both commands honor `-config`; `-install -edit` creates the config and opens it.
+`-install` creates the config directory and replaces any existing config with defaults, then exits. When `CONFIGURATION_ROOT` is nonempty, it first attempts to download `<root>/clock.config.json` over HTTP or HTTPS. The download has a 10-second timeout and a 1 MiB limit. Valid downloaded settings override built-in defaults; missing settings inherit built-in defaults. If downloading or validation fails, the app prints a warning and installs built-in defaults. The config is replaced atomically.
+
+```sh
+CONFIGURATION_ROOT=https://aaa.bbb.ccc/ddd/eee ./clock -install
+# Downloads https://aaa.bbb.ccc/ddd/eee/clock.config.json
+```
+
+`-edit` creates the file only if missing, then opens it using `$VISUAL`, `$EDITOR`, or `vi`, in that order. Editor variables may include arguments (for example, `EDITOR='nano -w'`). The editor receives the terminal directly. Editing works even when the existing JSON is invalid. Both commands honor `-config`; `-install -edit` replaces the config and opens it. Normal startup and `-edit` preserve existing settings and do not download configs.
 
 ```json
 {
@@ -55,7 +62,7 @@ On first launch, the app creates `~/.config/clock/config.json`. Edit it and rest
 - `show_seconds`, `show_date`, `show_time_zone`, `show_help`: show or hide each element. Labels are omitted when the terminal is too short.
 - `date_format`: a Go time layout. For example, `2006-01-02` shows a numeric date. Use printable, single-column characters.
 - `scale`: `0` chooses the largest size that fits, up to `4`. Values `1`–`4` cap the digit size; smaller terminals automatically shrink the digits.
-- `alignment`: `left`, `center`, or `right`. The display is vertically centered.
+- `alignment`: choose `top-left`, `top-center`, `top-right`, `middle-left`, `middle-center`, `middle-right`, `bottom-left`, `bottom-center`, or `bottom-right`. The whole display, including visible date and help, is placed vertically; each line follows the horizontal alignment. Existing `left`, `center`, and `right` values keep vertical centering. `top`, `middle`, and `bottom` are shortcuts for horizontal centering. Default: `center`.
 - Colors: `default`, `orange`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`. The eight standard colors also accept a `bright_` prefix. Orange uses RGB `#FFA500` and requires a terminal with true-color support; standard colors follow the terminal palette. Defaults are orange text on black.
 
 Digits always use Full Block `█` (U+2588). The digit `1` is narrower than other digits, and the display centers and scales using its actual width. A ready-to-copy configuration is included in `config.example.json`.
