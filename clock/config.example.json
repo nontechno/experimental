@@ -1,0 +1,17 @@
+{
+  "hour_format": 24,
+  "omit_leading_zero": false,
+  "show_seconds": true,
+  "show_am_pm": true,
+  "time_zone": "Local",
+  "show_date": true,
+  "date_format": "Monday, 02 January 2006",
+  "show_time_zone": true,
+  "show_help": true,
+  "scale": 0,
+  "alignment": "center",
+  "digit_color": "orange",
+  "date_color": "orange",
+  "help_color": "orange",
+  "background": "black"
+}
