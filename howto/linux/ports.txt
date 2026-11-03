@@ -1,0 +1,4 @@
+
+# who is listening on a port
+sudo ss -tulpn | grep :80
+
