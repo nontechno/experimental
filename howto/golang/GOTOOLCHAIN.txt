@@ -1,0 +1,6 @@
+https://go.dev/doc/toolchain
+
+GOTOOLCHAIN=go1.27.0 go get
+
+GOTOOLCHAIN=auto go get
+
