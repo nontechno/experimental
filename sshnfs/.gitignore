@@ -1,6 +1,5 @@
 go.work
 *.exe
-go.sum
 
 *.db
 *.db-shm

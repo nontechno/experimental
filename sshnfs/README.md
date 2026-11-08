@@ -21,7 +21,16 @@ go build -o sshnfs .
 GOOS=darwin GOARCH=arm64 go build -o sshnfs-darwin-arm64 .
 ```
 
-Requires Go 1.22 or newer. No cgo, no kernel extension, no macFUSE.
+Requires Go 1.26 or newer (`golang.org/x/crypto` needs it). `go.mod` pins the
+toolchain to go1.26.10, so an older 1.26.x downloads that release on first
+build and uses it automatically. No cgo, no kernel extension, no macFUSE.
+
+To check the dependencies for known vulnerabilities:
+
+```sh
+go install golang.org/x/vuln/cmd/govulncheck@latest
+govulncheck ./...
+```
 
 ## Usage
 
