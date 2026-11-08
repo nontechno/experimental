@@ -292,3 +292,46 @@ func TestProxyCommandTokensExpandOnce(t *testing.T) {
 		t.Fatalf("ProxyCommand = %q, want %q", cfg.ProxyCommand, want)
 	}
 }
+
+// go-nfs truncates through O_WRONLY|O_EXCL; without O_CREATE the O_EXCL is
+// dropped, so the request is an ordinary pooled open.
+func TestTruncateOpenDropsMeaninglessExcl(t *testing.T) {
+	d := startStallingSSHD(t)
+	cfg := stallConfig(t, d.addr)
+	log := NewLogger(LevelPanic)
+	conn := NewConn(cfg, log)
+	defer conn.Close()
+	fsys := NewFS(cfg, conn, log, "/")
+	defer fsys.Close()
+
+	f, err := fsys.Create("/file")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.Write([]byte("hello"))
+	f.Close()
+
+	bf, err := fsys.OpenFile("/file", os.O_WRONLY|os.O_EXCL, 0)
+	if err != nil {
+		t.Fatalf("open for truncate: %v", err)
+	}
+	if !bf.(*File).entry.pooled {
+		t.Fatal("the truncate open was kept out of the pool")
+	}
+	if err := bf.Truncate(2); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	bf.Close()
+	fi, err := fsys.Stat("/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() != 2 {
+		t.Fatalf("size %d after truncate, want 2", fi.Size())
+	}
+
+	// With O_CREATE, O_EXCL keeps its meaning.
+	if _, err := fsys.OpenFile("/file", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644); err == nil {
+		t.Fatal("exclusive create of an existing file succeeded")
+	}
+}

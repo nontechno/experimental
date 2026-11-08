@@ -272,6 +272,14 @@ func (f *FS) Open(name string) (billy.File, error) {
 }
 
 func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (billy.File, error) {
+	if flag&os.O_CREATE == 0 {
+		// go-nfs truncates (SETATTR size) through O_WRONLY|O_EXCL. Without
+		// O_CREATE, O_EXCL means nothing in POSIX, but sftp passes it on as
+		// SSH_FXF_EXCL, and a server that reads it as "fail if the file
+		// exists" would refuse every truncate. It also kept the handle out
+		// of the pool for no reason.
+		flag &^= os.O_EXCL
+	}
 	writable := flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC|os.O_APPEND) != 0
 	if f.readOnly && writable {
 		return nil, f.readOnlyErr()

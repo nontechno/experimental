@@ -707,6 +707,15 @@ func (c *Config) validate() error {
 		if !fi.IsDir() {
 			return fmt.Errorf("mount point %s is not a directory", c.MountPoint)
 		}
+		// Mounting on top of an existing mount hides it rather than failing:
+		// a second copy of sshnfs for the same mount point, or the leftover
+		// of one that was killed, would stay mounted underneath for good.
+		if on, err := mountedOn(c.MountPoint, c.MountTimeout.D()); err != nil {
+			return fmt.Errorf("mount point %s: %w", c.MountPoint, err)
+		} else if on {
+			return fmt.Errorf("something is already mounted on %s (another sshnfs, or one that did not exit cleanly?); unmount it first: umount %s",
+				c.MountPoint, c.MountPoint)
+		}
 	}
 	return nil
 }

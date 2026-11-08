@@ -2,7 +2,10 @@
 
 package main
 
-import "os/exec"
+import (
+	"os/exec"
+	"time"
+)
 
 // detachProcessGroup is a no-op where there are no Unix process groups.
 func detachProcessGroup(*exec.Cmd) {}
@@ -12,3 +15,6 @@ func killProcess(cmd *exec.Cmd) {
 		cmd.Process.Kill()
 	}
 }
+
+// mountedOn cannot tell without Unix device numbers; it assumes not.
+func mountedOn(string, time.Duration) (bool, error) { return false, nil }

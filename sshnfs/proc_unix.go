@@ -4,7 +4,9 @@ package main
 
 import (
 	"os/exec"
+	"path/filepath"
 	"syscall"
+	"time"
 )
 
 // detachProcessGroup puts a helper command in a process group of its own.
@@ -34,4 +36,28 @@ func killProcess(cmd *exec.Cmd) {
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	cmd.Process.Kill()
+}
+
+// mountedOn reports whether path is itself a mount point: whether it lives
+// on a different device than its parent. Both stats are bounded, as a stale
+// NFS mount would block them.
+func mountedOn(path string, d time.Duration) (bool, error) {
+	parent := filepath.Dir(path)
+	if parent == path {
+		return false, nil // the root
+	}
+	fi, err := statWithin(path, d)
+	if err != nil {
+		return false, err
+	}
+	pi, err := statWithin(parent, d)
+	if err != nil {
+		return false, err
+	}
+	a, ok1 := fi.Sys().(*syscall.Stat_t)
+	b, ok2 := pi.Sys().(*syscall.Stat_t)
+	if !ok1 || !ok2 {
+		return false, nil
+	}
+	return a.Dev != b.Dev, nil
 }

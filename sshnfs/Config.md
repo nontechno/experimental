@@ -688,6 +688,10 @@ The local directory to mount the export on.
 - **Validation:** the directory must exist and be a directory. It is checked
   with a time limit (`mount_timeout`), so a dead NFS mount left on it by a
   crashed run produces an error suggesting `umount -f` rather than a hang.
+- **Already mounted:** on macOS and Linux, a directory that already has
+  something mounted on it is refused (another sshnfs still running, or one that
+  was killed). Mounting on top would hide the old mount and leave it there for
+  good; unmount it first.
 - Two mounts cannot share a mount point.
 
 #### `mount_options`

@@ -205,6 +205,10 @@ func dialProxyCommand(command string, target *endpoint, log *Logger, detach bool
 		for sc.Scan() {
 			log.Warnf("proxy command: %s", sc.Text())
 		}
+		// The scanner gives up on a line longer than its buffer. Keep
+		// draining regardless: once the pipe fills, the command blocks on
+		// its next diagnostic, and the connection it carries stalls.
+		io.Copy(io.Discard, stderr)
 	}()
 	return &cmdConn{cmd: cmd, stdin: stdin, stdout: stdout, name: expanded}, nil
 }

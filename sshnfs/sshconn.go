@@ -610,6 +610,8 @@ func (c *Conn) authMethods(e *endpoint) (methods []ssh.AuthMethod, cleanup func(
 	// Kept apart from the named result, which the error returns below set to
 	// nil before deferred calls run.
 	closeAgent := func() {}
+	var agentConn net.Conn
+	agentTimeout := e.ConnectTimeout
 	defer func() {
 		if err != nil {
 			closeAgent()
@@ -623,11 +625,8 @@ func (c *Conn) authMethods(e *endpoint) (methods []ssh.AuthMethod, cleanup func(
 			// So the connect and every exchange with it share the handshake's
 			// deadline, and the connection is closed afterwards rather than
 			// leaked on every dial.
-			timeout := e.ConnectTimeout
-			if conn, err := net.DialTimeout("unix", sock, timeout); err == nil {
-				if timeout > 0 {
-					conn.SetDeadline(time.Now().Add(timeout))
-				}
+			if conn, err := net.DialTimeout("unix", sock, agentTimeout); err == nil {
+				agentConn = conn
 				methods = append(methods, ssh.PublicKeysCallback(agent.NewClient(conn).Signers))
 				closeAgent = func() { conn.Close() }
 				c.log.Debugf("using ssh-agent at %s", sock)
@@ -692,6 +691,12 @@ func (c *Conn) authMethods(e *endpoint) (methods []ssh.AuthMethod, cleanup func(
 
 	if len(methods) == 0 {
 		return nil, nil, fmt.Errorf("no usable ssh authentication method for %s (try -i, -agent or -ask-password)", e.Addr())
+	}
+	// The deadline starts now, when the handshake does, not when the agent
+	// was dialed: a passphrase prompt in between can take longer than the
+	// timeout, which would leave the agent unusable for this handshake.
+	if agentConn != nil && agentTimeout > 0 {
+		agentConn.SetDeadline(time.Now().Add(agentTimeout))
 	}
 	return methods, closeAgent, nil
 }
