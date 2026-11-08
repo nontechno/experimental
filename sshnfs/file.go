@@ -338,7 +338,7 @@ func (f *File) Read(p []byte) (int, error) {
 	})
 	f.offset += int64(n)
 	if err != nil && !errors.Is(err, io.EOF) {
-		f.noteError(err)
+		f.failedLocked(err)
 	}
 	return n, err
 }
@@ -357,7 +357,7 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 		return e
 	})
 	if err != nil && !errors.Is(err, io.EOF) {
-		f.noteError(err)
+		f.failed(err)
 	}
 	return n, err
 }
@@ -380,7 +380,7 @@ func (f *File) Write(p []byte) (int, error) {
 	f.offset += int64(n)
 	f.fs.attrs.invalidateAttr(f.remote)
 	if err != nil {
-		f.noteError(err)
+		f.failedLocked(err)
 	}
 	return n, err
 }
@@ -403,7 +403,7 @@ func (f *File) WriteAt(p []byte, off int64) (int, error) {
 	})
 	f.fs.attrs.invalidateAttr(f.remote)
 	if err != nil {
-		f.noteError(err)
+		f.failed(err)
 	}
 	return n, err
 }
@@ -427,7 +427,7 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 			return e
 		})
 		if err != nil {
-			f.noteError(err)
+			f.failedLocked(err)
 			return 0, err
 		}
 		f.offset = st.Size() + offset
@@ -436,6 +436,7 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 	}
 	if f.offset < 0 {
 		f.offset = 0
+		f.releaseLocked()
 		return 0, fmt.Errorf("negative offset")
 	}
 	return f.offset, nil
@@ -454,7 +455,7 @@ func (f *File) Truncate(size int64) error {
 	err := f.remoteCall("truncate", func() error { return f.entry.f.Truncate(size) })
 	f.fs.attrs.invalidateAttr(f.remote)
 	if err != nil {
-		f.noteError(err)
+		f.failed(err)
 	}
 	return err
 }
@@ -466,20 +467,38 @@ func (f *File) Unlock() error { return nil }
 
 func (f *File) Close() error {
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.releaseLocked()
+}
+
+// releaseLocked gives the handle back to the pool, once. f.mu must be held.
+func (f *File) releaseLocked() error {
 	if f.closed {
-		f.mu.Unlock()
 		return nil
 	}
 	f.closed = true
-	f.mu.Unlock()
 	return f.fs.files.release(f.entry)
 }
 
-// noteError retires the shared handle when the failure was the session dying.
-func (f *File) noteError(err error) {
+// failedLocked handles a failed call: it retires the session if the failure
+// was the session dying, and gives the handle back at once. The latter
+// because go-nfs returns from WRITE and SETATTR on an error without closing
+// the file; the handle would otherwise stay referenced for as long as the
+// session lives, never idle-closed or evicted, and after a remove it would
+// keep the deleted file's space in use on the server. Any later call on the
+// file fails with os.ErrClosed, and Close is a no-op. f.mu must be held.
+func (f *File) failedLocked(err error) {
 	if isConnError(err) {
 		f.fs.conn.Invalidate(f.entry.gen)
 		f.fs.files.dropAll()
 		f.fs.attrs.clear()
 	}
+	f.releaseLocked()
+}
+
+// failed is failedLocked for callers not holding f.mu.
+func (f *File) failed(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failedLocked(err)
 }

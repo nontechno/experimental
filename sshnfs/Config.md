@@ -539,7 +539,8 @@ it, up to `reconnect_max_delay`.
 **Flag:** `-reconnect-max-delay` · **Type:** duration · **Default:** `"1m"`
 
 The ceiling for the doubling backoff. It must be at least `reconnect_delay`,
-unless it is `0`, which means no ceiling.
+unless it is `0`, which means the built-in ceiling of one hour (doubling with no
+limit at all would soon wait days between attempts).
 
 #### `reconnect_max_attempts`
 **Flag:** `-reconnect-attempts` · **Type:** integer · **Default:** `0`

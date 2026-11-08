@@ -102,6 +102,10 @@ func (c *Conn) SetOnReconnect(fn func()) {
 // connect timeout, and the backlog grows faster than it drains.
 const dialBackoff = time.Second
 
+// maxReconnectDelay caps the reconnection backoff when reconnect_max_delay is
+// 0, which means "no ceiling of my own".
+const maxReconnectDelay = time.Hour
+
 func NewConn(cfg *Config, log *Logger) *Conn {
 	return &Conn{
 		cfg:     cfg,
@@ -279,6 +283,12 @@ func (c *Conn) reconnectLoop() {
 		delay = time.Second
 	}
 	ceiling := c.cfg.ReconnectMaxDelay.D()
+	if ceiling <= 0 {
+		// "No ceiling" still needs one: doubling without end passes a day
+		// after some fifteen failures, which is the same as giving up, and
+		// eventually overflows into a negative delay that retries flat out.
+		ceiling = maxReconnectDelay
+	}
 
 	for attempt := 1; ; attempt++ {
 		select {
@@ -301,7 +311,7 @@ func (c *Conn) reconnectLoop() {
 			c.log.Errorf("giving up after %d reconnection attempts", attempt)
 			return
 		}
-		if delay *= 2; ceiling > 0 && delay > ceiling {
+		if delay *= 2; delay > ceiling {
 			delay = ceiling
 		}
 	}

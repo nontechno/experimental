@@ -229,3 +229,66 @@ func TestAbortPromptWithoutPrompt(t *testing.T) {
 		t.Fatal("abortPrompt reported a prompt although none is waiting")
 	}
 }
+
+// A failed call gives the pooled handle back at once: go-nfs does not close
+// the file after a failed WRITE or SETATTR, so waiting for Close would leak
+// the reference (and the remote handle) for the life of the session.
+func TestFailedCallReleasesTheHandle(t *testing.T) {
+	d := startStallingSSHD(t)
+	cfg := stallConfig(t, d.addr)
+	log := NewLogger(LevelPanic)
+	conn := NewConn(cfg, log)
+	defer conn.Close()
+	fsys := NewFS(cfg, conn, log, "/")
+	defer fsys.Close()
+
+	f, err := fsys.Create("/file")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.Close()
+
+	bf, err := fsys.OpenFile("/file", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	file := bf.(*File)
+	if !file.entry.pooled {
+		t.Fatal("expected a pooled handle")
+	}
+	if _, err := file.Seek(-1, 0); err == nil {
+		t.Fatal("a negative seek should fail")
+	}
+	fsys.files.mu.Lock()
+	refs := file.entry.refs
+	fsys.files.mu.Unlock()
+	if refs != 0 {
+		t.Fatalf("handle still referenced %d times after a failed call", refs)
+	}
+	if _, err := file.Write([]byte("x")); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("write after a failure: got %v, want os.ErrClosed", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close after a failure: %v", err)
+	}
+	fsys.files.mu.Lock()
+	refs = file.entry.refs
+	fsys.files.mu.Unlock()
+	if refs != 0 {
+		t.Fatalf("close after a failure released the handle again (refs %d)", refs)
+	}
+}
+
+// ProxyCommand tokens are expanded once: a literal %% must survive.
+func TestProxyCommandTokensExpandOnce(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Host, cfg.Port, cfg.User = "example.net", 2200, "u"
+	cfg.UseSSHConfig = false
+	cfg.ProxyCommand = "printf %%h; nc %h %p"
+	if err := cfg.applySSHConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "printf %h; nc example.net 2200"; cfg.ProxyCommand != want {
+		t.Fatalf("ProxyCommand = %q, want %q", cfg.ProxyCommand, want)
+	}
+}

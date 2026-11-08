@@ -166,13 +166,14 @@ func (c *cmdConn) SetWriteDeadline(time.Time) error { return nil }
 
 // dialProxyCommand runs the command and hands back its pipes as a connection.
 // The command is executed through /bin/sh, exactly as ssh does, so it may
-// contain pipes, quoting and the usual %h/%p/%r tokens.
+// contain pipes and quoting. Its %h/%p/%r tokens were already expanded with
+// the configuration (applySSHConfig, fillHop), and must not be expanded twice.
 //
 // detach runs it in a process group of its own (see detachProcessGroup). It
 // is set whenever the command could not prompt anyway: on reconnects, which
 // never prompt, and when there is no terminal.
 func dialProxyCommand(command string, target *endpoint, log *Logger, detach bool) (net.Conn, error) {
-	expanded := expandSSHTokens(command, target.Host, target.Host, target.User, target.Port)
+	expanded := command
 	log.Debugf("proxy command: %s", expanded)
 
 	cmd := exec.Command("/bin/sh", "-c", expanded)

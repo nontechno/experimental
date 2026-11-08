@@ -131,7 +131,9 @@ func (c *Config) applySSHConfig() error {
 		}
 	}
 	if set == nil {
-		// Still resolve a ProxyJump given by flag or config file.
+		// Still expand a ProxyCommand and resolve a ProxyJump given by flag
+		// or config file.
+		c.ProxyCommand = expandSSHTokens(c.ProxyCommand, c.Host, c.Host, c.User, c.Port)
 		return c.resolveProxy(nil)
 	}
 
@@ -216,9 +218,12 @@ func (c *Config) applySSHConfig() error {
 	}
 	if !c.isExplicit("proxy_command") {
 		if v := set.get(alias, "ProxyCommand"); v != "" {
-			c.ProxyCommand = expandSSHTokens(v, alias, host, c.User, c.Port)
+			c.ProxyCommand = v
 		}
 	}
+	// Tokens are expanded here, once, wherever the command came from. Doing
+	// it again when dialing would turn a literal "%%h" into the host name.
+	c.ProxyCommand = expandSSHTokens(c.ProxyCommand, alias, host, c.User, c.Port)
 
 	if !c.isExplicit("connect_timeout") {
 		// "ConnectTimeout 0" would mean no timeout at all; keep ours.
@@ -338,7 +343,8 @@ func (c *Config) fillHop(set *sshConfigSet, alias string, hop *endpoint) error {
 			hop.IdentityFiles = append(hop.IdentityFiles, p)
 		}
 	}
-	if strings.EqualFold(set.get(alias, "StrictHostKeyChecking"), "no") {
+	switch strings.ToLower(set.get(alias, "StrictHostKeyChecking")) {
+	case "no", "off":
 		hop.Insecure = true
 	}
 
