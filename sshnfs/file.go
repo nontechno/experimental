@@ -115,6 +115,17 @@ func (c *fileCache) acquire(cl *sftp.Client, gen uint64, remotePath string, flag
 		f, e = cl.OpenFile(remotePath, openFlag)
 		return e
 	})
+	if err != nil && pool && writable && openFlag != flag && errors.Is(err, os.ErrPermission) {
+		// The pool opens writable handles read/write so one handle serves
+		// every request, but a write-only file (mode 0200, say) can only be
+		// opened write-only. Do exactly what was asked, unpooled.
+		pool = false
+		err = c.bound(gen, "open "+remotePath, func() error {
+			var e error
+			f, e = cl.OpenFile(remotePath, flag)
+			return e
+		})
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -68,6 +68,33 @@ func run(args []string) int {
 	// more: a stalled stderr must not hold up exit either.
 	defer stderr.Flush(2 * time.Second)
 
+	// Signals are handled from the start. Dying on Ctrl-C halfway through
+	// bringing up several mounts would leave the ones already mounted
+	// pointing at a server that no longer exists, which makes every access
+	// to them hang. The first signal asks for an orderly stop, noticed
+	// between startup steps (each of them bounded) or by the wait below; a
+	// second one exits at once, for cleanup that is itself stuck.
+	sig := make(chan os.Signal, 2)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	stop := make(chan struct{})
+	go func() {
+		s := <-sig
+		log.Infof("got %s, shutting down (repeat to exit immediately)", s)
+		close(stop)
+		s = <-sig
+		log.Errorf("got %s again, exiting without finishing cleanup", s)
+		stderr.Flush(time.Second)
+		os.Exit(130)
+	}()
+	stopping := func() bool {
+		select {
+		case <-stop:
+			return true
+		default:
+			return false
+		}
+	}
+
 	// Bring every mount up before mounting any of them, so a failure on the
 	// third host does not leave the first two mounted.
 	servers := make([]*server, 0, len(mounts))
@@ -84,6 +111,10 @@ func run(args []string) int {
 			return 1
 		}
 		servers = append(servers, srv)
+		if stopping() {
+			shutdown()
+			return 130
+		}
 	}
 
 	serveErr := make(chan error, len(servers))
@@ -102,32 +133,21 @@ func run(args []string) int {
 			shutdown()
 			return 1
 		}
+		if stopping() {
+			shutdown()
+			return 130
+		}
 	}
-
-	sig := make(chan os.Signal, 2)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 
 	exit := 0
 	select {
-	case s := <-sig:
-		log.Infof("got %s, shutting down (repeat to exit immediately)", s)
+	case <-stop:
 	case err := <-serveErr:
 		if err != nil {
 			log.Errorf("nfs server stopped: %v", err)
 			exit = 1
 		}
 	}
-
-	// Cleanup can still block where we have no control, e.g. umount on a
-	// hard-mounted share whose server stopped answering. A second signal is
-	// the way out; without this, signal.Notify would swallow it and only
-	// kill -9 would end the process.
-	go func() {
-		s := <-sig
-		log.Errorf("got %s again, exiting without finishing cleanup", s)
-		stderr.Flush(time.Second)
-		os.Exit(130)
-	}()
 
 	shutdown()
 	return exit
@@ -185,6 +205,13 @@ func newServer(cfg *Config, log *Logger, labelled bool) (*server, error) {
 	host := addr.IP.String()
 	if addr.IP.IsUnspecified() {
 		host = "127.0.0.1"
+	}
+	if !addr.IP.IsLoopback() {
+		log.Warnf("the NFS server on %s does no authentication; anyone who can reach it can read%s the export",
+			listener.Addr(), map[bool]string{false: " and write", true: ""}[cfg.ReadOnly])
+	}
+	if cfg.RequirePrivilegedPort {
+		listener = &privilegedListener{Listener: listener, log: log}
 	}
 
 	mode := "read/write"
@@ -247,7 +274,15 @@ func (s *server) close() {
 	// not left with in-flight requests to a dead port.
 	if mounted && s.cfg.UnmountOnExit {
 		if err := Unmount(s.cfg); err != nil {
-			s.log.Errorf("unmount: %v", err)
+			// The server is about to go away regardless, so the mount is
+			// left with nothing behind it; say how to get rid of it.
+			sudo := ""
+			if s.cfg.MountSudo {
+				sudo = "sudo "
+			}
+			s.log.Errorf("unmount %s failed: %v", s.cfg.MountPoint, err)
+			s.log.Errorf("%s stays mounted with no server behind it; once nothing is using it, run: %sumount -f %s",
+				s.cfg.MountPoint, sudo, s.cfg.MountPoint)
 		} else {
 			s.log.Infof("unmounted %s", s.cfg.MountPoint)
 		}
@@ -352,4 +387,28 @@ func (h *statHandler) FSStat(ctx context.Context, f billy.Filesystem, s *nfs.FSS
 	s.FreeFiles = st.Ffree
 	s.AvailableFiles = st.Favail
 	return nil
+}
+
+// privilegedListener accepts only connections from ports below 1024. The NFS
+// server does no authentication, and on a machine shared with other users
+// loopback is no barrier: anyone could mount the export. The kernel's NFS
+// client uses a reserved port when mounted with resvport, which only root can
+// bind, so this admits the kernel and turns away ordinary local users.
+type privilegedListener struct {
+	net.Listener
+	log *Logger
+}
+
+func (l *privilegedListener) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if a, ok := c.RemoteAddr().(*net.TCPAddr); ok && a.Port > 0 && a.Port < 1024 {
+			return c, nil
+		}
+		l.log.Warnf("refused an NFS connection from %s: not from a privileged port (require_privileged_port)", c.RemoteAddr())
+		c.Close()
+	}
 }

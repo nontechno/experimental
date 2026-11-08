@@ -59,13 +59,14 @@ printed at startup:
 
 ```
 mount -t nfs -o vers=3,tcp,soft,intr,timeo=30,retrans=3,rsize=131072,wsize=131072,\
-locallocks,noresvport,actimeo=1,port=20490,mountport=20490 127.0.0.1:/ ~/mnt/build
+locallocks,resvport,actimeo=1,port=20490,mountport=20490 127.0.0.1:/ ~/mnt/build
 ```
 
 Both `port` and `mountport` are required: the server does not register with
-rpcbind, so the client has to be told where to find it. `noresvport` avoids
-needing a privileged source port, and `locallocks` keeps `flock` working
-client-side (NFSv3 locking is not implemented server-side).
+rpcbind, so the client has to be told where to find it. `resvport` makes the
+kernel connect from a reserved port, which the server requires on macOS (see
+Security), and `locallocks` keeps `flock` working client-side (NFSv3 locking
+is not implemented server-side).
 
 ## ~/.ssh/config
 
@@ -193,7 +194,9 @@ sshnfs -example-config > ~/.config/sshnfs.json   # start from the defaults
 sshnfs -config ~/.config/sshnfs.json -print-config  # show what would be used
 ```
 
-See `config.example.json`. Selected options:
+See `config.example.json`, and [Config.md](Config.md) for every entry in detail:
+what it does, when to set it, example values and their effects. Selected
+options:
 
 | Flag | Config key | Meaning |
 |---|---|---|
@@ -207,6 +210,7 @@ See `config.example.json`. Selected options:
 | `-known-hosts`, `-insecure` | `known_hosts_file`, `insecure_ignore_host_key` | host key checking |
 | `-listen` | `listen` | NFS listen address (default `127.0.0.1:0`) |
 | `-read-only` | `read_only` | refuse every mutating operation |
+| `-require-privileged-port` | `require_privileged_port` | accept NFS connections only from ports below 1024, i.e. the kernel; mounts with `resvport` (default on for macOS) |
 | `-uid`, `-gid` | `uid`, `gid` | squash ownership; `-1` passes the remote ids through |
 | `-connect-timeout` | `connect_timeout` | TCP connect, each SSH handshake, SFTP start, ssh-agent exchanges (default `15s`) |
 | `-op-timeout` | `op_timeout` | give up on an SFTP request when the server has sent nothing for this long (default `30s`, `0` waits forever) |
@@ -310,7 +314,17 @@ does not make every queued request pay its own full timeout.
 
 The NFS server does no authentication — it accepts `AUTH_NULL` from anyone who
 can reach it. It binds `127.0.0.1` by default; **do not** move it to `0.0.0.0`
-on a shared machine. Access control lives entirely on the SSH side: the export
+on a shared machine (a warning is logged if you do).
+
+Loopback keeps the network out, but not other users of the same machine: any
+local account could mount your export. So on macOS, `-require-privileged-port`
+is on by default. Connections are then accepted only from ports below 1024,
+which only root can bind, so only the kernel's NFS client gets in. The mount is
+made with `resvport`, and a `noresvport` in your own `mount_options` is dropped.
+If you mount by hand, use the command printed at startup, or at least include
+`resvport`; a mount with `noresvport` is refused. Turn the check off with
+`-require-privileged-port=false`. On Linux it is off by default and can be
+turned on the same way. Access control lives entirely on the SSH side: the export
 is confined to the remote root you chose, and `..` cannot escape it.
 
 `-uid`/`-gid` default to your own ids so remote files look like yours locally.
@@ -318,6 +332,12 @@ This is cosmetic — the server enforces permissions as your SSH user, not as th
 uid the client sends.
 
 ## Known limitations
+
+- **Retried operations after a dropped connection.** When the connection dies
+  mid-request the request is retried once. If the first attempt had already
+  taken effect, a remove, rename or symlink is recognised as done rather than
+  reported as "no such file" or "exists". An exclusive create can still
+  report "exists" for a file it just created.
 
 - **One stuck NFS connection, one goroutine.** go-nfs answers one request at a
   time per client connection. If a client connection dies while a reply is
@@ -352,7 +372,7 @@ uid the client sends.
   that, so none is attempted.
 - Requires an SFTP subsystem on the server. `statvfs@openssh.com` is used for
   free-space reporting when available; without it the export reports a fixed
-  1 TiB.
+  1 TiB. Free space is cached for 5 seconds.
 
 ## Tests
 

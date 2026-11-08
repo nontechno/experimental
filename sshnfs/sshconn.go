@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -45,14 +47,53 @@ type Conn struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
-	// Secrets gathered during the first connection, so a reconnect never has
-	// to prompt. Only touched from dial, which runs under the dialing lock.
+	// onReconnect is called after a successful redial so caches keyed on the
+	// old session can be dropped. Guarded by mu: it is installed after the
+	// first connection, when a reconnect may already be under way.
+	onReconnect func()
+}
+
+// secretStore keeps what was entered during the first connection, so a
+// reconnect never has to prompt. It is shared by every mount in the process,
+// so mounts using the same key ask for its passphrase once.
+type secretStore struct {
+	mu        sync.Mutex
 	signers   map[string]ssh.Signer // parsed private keys by path
 	passwords map[string]string     // by user@host:port
+}
 
-	// onReconnect is called after a successful redial so caches keyed on the
-	// old session can be dropped.
-	onReconnect func()
+var secrets = &secretStore{signers: map[string]ssh.Signer{}, passwords: map[string]string{}}
+
+func (s *secretStore) signer(path string) (ssh.Signer, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.signers[path]
+	return v, ok
+}
+
+func (s *secretStore) setSigner(path string, v ssh.Signer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.signers[path] = v
+}
+
+func (s *secretStore) password(key string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.passwords[key]
+}
+
+func (s *secretStore) setPassword(key, v string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.passwords[key] = v
+}
+
+// SetOnReconnect installs the hook run after every successful redial.
+func (c *Conn) SetOnReconnect(fn func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onReconnect = fn
 }
 
 // dialBackoff is how long a failed dial is remembered. Without it, an
@@ -62,12 +103,10 @@ const dialBackoff = time.Second
 
 func NewConn(cfg *Config, log *Logger) *Conn {
 	return &Conn{
-		cfg:       cfg,
-		log:       log,
-		done:      make(chan struct{}),
-		dialing:   make(chan struct{}, 1),
-		signers:   map[string]ssh.Signer{},
-		passwords: map[string]string{},
+		cfg:     cfg,
+		log:     log,
+		done:    make(chan struct{}),
+		dialing: make(chan struct{}, 1),
 	}
 }
 
@@ -146,13 +185,14 @@ func (c *Conn) connect(ignoreBackoff bool) (*sftp.Client, uint64, error) {
 	c.lastErr = nil
 	c.gen++
 	gen := c.gen
+	hook := c.onReconnect
 	c.mu.Unlock()
 
 	go c.watch(sshClient, gen)
 	if reconnect {
 		c.log.Infof("reconnected to %s@%s", c.cfg.User, c.cfg.Addr())
-		if c.onReconnect != nil {
-			c.onReconnect()
+		if hook != nil {
+			hook()
 		}
 	}
 	return sftpClient, gen, nil
@@ -539,16 +579,17 @@ func (c *Conn) clientConfig(e *endpoint) (*ssh.ClientConfig, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	hostKey, err := c.hostKeyCallback(e)
+	hostKey, algos, err := c.hostKeyCallback(e)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
 	return &ssh.ClientConfig{
-		User:            e.User,
-		Auth:            auths,
-		HostKeyCallback: hostKey,
-		Timeout:         e.ConnectTimeout,
+		User:              e.User,
+		Auth:              auths,
+		HostKeyCallback:   hostKey,
+		HostKeyAlgorithms: algos,
+		Timeout:           e.ConnectTimeout,
 	}, cleanup, nil
 }
 
@@ -610,7 +651,7 @@ func (c *Conn) authMethods(e *endpoint) (methods []ssh.AuthMethod, cleanup func(
 	password := e.Password
 	secretKey := e.User + "@" + e.Addr()
 	if password == "" {
-		password = c.passwords[secretKey]
+		password = secrets.password(secretKey)
 	}
 	if password == "" && e.AskPassword {
 		if !interactive {
@@ -623,7 +664,7 @@ func (c *Conn) authMethods(e *endpoint) (methods []ssh.AuthMethod, cleanup func(
 		password = p
 		// Remembered per hop, so a jump host's password is not asked for
 		// again when the chain is rebuilt.
-		c.passwords[secretKey] = p
+		secrets.setPassword(secretKey, p)
 	}
 	if password != "" {
 		methods = append(methods,
@@ -675,17 +716,16 @@ func (c *Conn) neverConnected() bool {
 }
 
 // loadKey returns the signer for a key file, parsing (and if need be
-// prompting for) it only the first time. Called from dial, under the dialing
-// lock.
+// prompting for) it only the first time in this process.
 func (c *Conn) loadKey(path, passphrase string, interactive bool) (ssh.Signer, error) {
-	if s, ok := c.signers[path]; ok {
+	if s, ok := secrets.signer(path); ok {
 		return s, nil
 	}
 	s, err := loadPrivateKey(path, passphrase, interactive)
 	if err != nil {
 		return nil, err
 	}
-	c.signers[path] = s
+	secrets.setSigner(path, s)
 	return s, nil
 }
 
@@ -725,15 +765,20 @@ func loadPrivateKey(path, passphrase string, interactive bool) (ssh.Signer, erro
 	return nil, fmt.Errorf("parse key %s: %w", path, err)
 }
 
-func (c *Conn) hostKeyCallback(e *endpoint) (ssh.HostKeyCallback, error) {
+// hostKeyCallback verifies host keys against known_hosts. It also returns the
+// host key algorithms to ask for: those of the keys already on file for this
+// host. Without that the server picks from its own preference list, and a
+// host known only by its ed25519 key that prefers ecdsa fails with a scary
+// "key mismatch" although nothing is wrong. nil means no preference.
+func (c *Conn) hostKeyCallback(e *endpoint) (ssh.HostKeyCallback, []string, error) {
 	if e.Insecure {
 		c.log.Warnf("host key verification disabled for %s", e.Host)
-		return ssh.InsecureIgnoreHostKey(), nil
+		return ssh.InsecureIgnoreHostKey(), nil, nil
 	}
 	path := expandUser(e.KnownHostsFile)
 	cb, err := knownhosts.New(path)
 	if err != nil {
-		return nil, fmt.Errorf("known_hosts %s: %w (use -known-hosts or -insecure)", path, err)
+		return nil, nil, fmt.Errorf("known_hosts %s: %w (use -known-hosts or -insecure)", path, err)
 	}
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		if err := cb(hostname, remote, key); err != nil {
@@ -745,7 +790,45 @@ func (c *Conn) hostKeyCallback(e *endpoint) (ssh.HostKeyCallback, error) {
 			return err
 		}
 		return nil
-	}, nil
+	}, knownHostAlgorithms(cb, e.Addr()), nil
+}
+
+// knownHostAlgorithms lists the host key algorithms matching the keys on file
+// for address. knownhosts has no lookup call, but checking a key that is on
+// file for nobody fails with an error listing the keys that are.
+func knownHostAlgorithms(cb ssh.HostKeyCallback, address string) []string {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil
+	}
+	probe, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		return nil
+	}
+	var kerr *knownhosts.KeyError
+	if err := cb(address, &net.TCPAddr{IP: net.IPv4zero}, probe); !errors.As(err, &kerr) {
+		return nil
+	}
+	var algos []string
+	seen := map[string]bool{}
+	add := func(a string) {
+		if !seen[a] {
+			seen[a] = true
+			algos = append(algos, a)
+		}
+	}
+	for _, k := range kerr.Want {
+		switch t := k.Key.Type(); t {
+		case ssh.KeyAlgoRSA:
+			// One RSA key serves all three signature algorithms.
+			add(ssh.KeyAlgoRSASHA512)
+			add(ssh.KeyAlgoRSASHA256)
+			add(ssh.KeyAlgoRSA)
+		default:
+			add(t)
+		}
+	}
+	return algos
 }
 
 func promptPassword(prompt string) (string, error) {

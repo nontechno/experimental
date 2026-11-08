@@ -12,10 +12,16 @@ import (
 // mountOptions makes sure the caller supplied options carry the port the
 // server actually listened on. Both port and mountport are required because
 // the server does not register with rpcbind.
-func mountOptions(base string, port int) string {
+// With resvport set, the client is made to connect from a reserved port, which
+// is what require_privileged_port checks for; a noresvport in base would make
+// every connection be refused, so it is dropped.
+func mountOptions(base string, port int, resvport bool) string {
 	opts := []string{}
 	for _, o := range strings.Split(base, ",") {
 		if o = strings.TrimSpace(o); o != "" {
+			if resvport && o == "noresvport" {
+				continue
+			}
 			opts = append(opts, o)
 		}
 	}
@@ -26,6 +32,9 @@ func mountOptions(base string, port int) string {
 			}
 		}
 		return false
+	}
+	if resvport && !has("resvport") {
+		opts = append(opts, "resvport")
 	}
 	if !has("port") {
 		opts = append(opts, fmt.Sprintf("port=%d", port))
@@ -41,7 +50,7 @@ func mountOptions(base string, port int) string {
 func MountCommand(cfg *Config, host string, port int, mountPoint string) []string {
 	argv := []string{
 		"mount", "-t", "nfs",
-		"-o", mountOptions(cfg.MountOptions, port),
+		"-o", mountOptions(cfg.MountOptions, port, cfg.RequirePrivilegedPort),
 		fmt.Sprintf("%s:/", host),
 		mountPoint,
 	}

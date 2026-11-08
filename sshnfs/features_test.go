@@ -352,6 +352,8 @@ func TestMultipleMountsServeIndependently(t *testing.T) {
 	errCh := make(chan error, len(mounts))
 	targets := map[string]*nfsc.Target{}
 	for _, cfg := range mounts {
+		// go-nfs-client connects from an ordinary port, as no kernel would.
+		cfg.RequirePrivilegedPort = false
 		srv, err := newServer(cfg, log, true)
 		if err != nil {
 			t.Fatalf("%s: %v", cfg.Label(), err)

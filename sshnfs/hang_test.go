@@ -285,7 +285,8 @@ func TestReconnectNeverPromptsForPassword(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	conn.passwords["u@h:22"] = "remembered"
+	secrets.setPassword("u@h:22", "remembered")
+	defer secrets.setPassword("u@h:22", "")
 	if _, _, err := conn.authMethods(e); err != nil {
 		t.Fatalf("with a remembered password: %v", err)
 	}

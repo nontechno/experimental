@@ -141,15 +141,16 @@ type Config struct {
 	ReconnectMaxAttempts int      `json:"reconnect_max_attempts"` // 0 = forever
 
 	// ----- nfs server -----
-	Listen       string   `json:"listen"`
-	HandleCache  int      `json:"handle_cache_limit"`
-	AttrCacheTTL Duration `json:"attr_cache_ttl"`
-	DirCacheTTL  Duration `json:"dir_cache_ttl"`
-	FileIdle     Duration `json:"open_file_idle"`
-	FileCacheMax int      `json:"open_file_limit"`
-	ReadOnly     bool     `json:"read_only"`
-	UID          int      `json:"uid"` // -1 => report the remote uid as-is
-	GID          int      `json:"gid"` // -1 => report the remote gid as-is
+	Listen                string   `json:"listen"`
+	HandleCache           int      `json:"handle_cache_limit"`
+	AttrCacheTTL          Duration `json:"attr_cache_ttl"`
+	DirCacheTTL           Duration `json:"dir_cache_ttl"`
+	FileIdle              Duration `json:"open_file_idle"`
+	FileCacheMax          int      `json:"open_file_limit"`
+	ReadOnly              bool     `json:"read_only"`
+	RequirePrivilegedPort bool     `json:"require_privileged_port"` // admit only the kernel NFS client
+	UID                   int      `json:"uid"`                     // -1 => report the remote uid as-is
+	GID                   int      `json:"gid"`                     // -1 => report the remote gid as-is
 
 	// ----- local mount -----
 	MountPoint     string   `json:"mount_point"`
@@ -177,7 +178,10 @@ type Config struct {
 	showVersion   bool
 }
 
-const defaultMountOptionsDarwin = "vers=3,tcp,soft,intr,timeo=30,retrans=3,rsize=131072,wsize=131072,locallocks,noresvport,actimeo=1"
+// resvport, not noresvport: on macOS the server by default admits only the
+// kernel, which it recognises by its reserved source port (see
+// require_privileged_port).
+const defaultMountOptionsDarwin = "vers=3,tcp,soft,intr,timeo=30,retrans=3,rsize=131072,wsize=131072,locallocks,resvport,actimeo=1"
 
 const defaultMountOptionsLinux = "vers=3,tcp,soft,timeo=30,retrans=3,rsize=131072,wsize=131072,nolock,noacl"
 
@@ -231,8 +235,12 @@ func DefaultConfig() *Config {
 		GID:                  gid,
 		MountOptions:         defaultMountOptions(),
 		UnmountOnExit:        true,
-		LogLevel:             "info",
-		explicit:             map[string]bool{},
+		// On by default on macOS, where a shared machine is the usual case
+		// and mounting needs root anyway, so the kernel can always use a
+		// reserved port. Elsewhere it is opt-in.
+		RequirePrivilegedPort: runtime.GOOS == "darwin",
+		LogLevel:              "info",
+		explicit:              map[string]bool{},
 	}
 }
 
@@ -307,6 +315,7 @@ func (c *Config) bind(fs *flag.FlagSet) {
 	fs.Var(&c.FileIdle, "open-file-idle", "how long an idle sftp file handle is kept open")
 	fs.IntVar(&c.FileCacheMax, "open-file-limit", c.FileCacheMax, "maximum number of sftp file handles kept open")
 	fs.BoolVar(&c.ReadOnly, "read-only", c.ReadOnly, "export the remote filesystem read-only")
+	fs.BoolVar(&c.RequirePrivilegedPort, "require-privileged-port", c.RequirePrivilegedPort, "accept NFS connections only from ports below 1024, i.e. from the kernel, not other local users (default on for macOS)")
 	fs.IntVar(&c.UID, "uid", c.UID, "uid reported for every file (-1 passes the remote uid through)")
 	fs.IntVar(&c.GID, "gid", c.GID, "gid reported for every file (-1 passes the remote gid through)")
 

@@ -9,6 +9,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -27,6 +28,8 @@ type FS struct {
 
 	readOnly bool
 	uid, gid int
+
+	statvfs *statvfsCache
 }
 
 var (
@@ -45,11 +48,12 @@ func NewFS(cfg *Config, conn *Conn, log *Logger, root string) *FS {
 		readOnly: cfg.ReadOnly,
 		uid:      cfg.UID,
 		gid:      cfg.GID,
+		statvfs:  &statvfsCache{},
 	}
-	conn.onReconnect = func() {
+	conn.SetOnReconnect(func() {
 		f.files.dropAll()
 		f.attrs.clear()
-	}
+	})
 	return f
 }
 
@@ -69,9 +73,11 @@ func normalizeRoot(root string) string {
 }
 
 // resolve maps a path inside the export to an absolute remote path, refusing
-// to escape the export root.
+// to escape the export root. go-nfs always joins with "/"; a backslash is an
+// ordinary character in a POSIX file name and must stay one, or "a\b" would
+// silently alias "a/b".
 func (f *FS) resolve(name string) string {
-	clean := path.Clean("/" + strings.ReplaceAll(name, "\\", "/"))
+	clean := path.Clean("/" + name)
 	if clean == "/" {
 		return f.root
 	}
@@ -86,6 +92,16 @@ func (f *FS) resolve(name string) string {
 // attempt is bounded by the op timeout; a timed-out operation is not retried,
 // since the path that stalled it would most likely stall the retry as well.
 func (f *FS) do(name string, op func(c *sftp.Client) error) error {
+	return f.doRetry(name, op, nil)
+}
+
+// doRetry is do for operations that are not idempotent. When the session
+// dies after the server carried out the request but before its reply
+// arrived, the retry fails ("no such file" for a remove that already
+// happened, "file exists" for a symlink already made). reconcile then gets
+// the retry's error and decides, by looking at the result, whether the
+// operation had in fact succeeded. It runs only after a retry.
+func (f *FS) doRetry(name string, op func(c *sftp.Client) error, reconcile func(c *sftp.Client, err error) error) error {
 	call := func(c *sftp.Client, gen uint64) error {
 		return f.conn.bounded(gen, name, func() error { return op(c) })
 	}
@@ -105,7 +121,19 @@ func (f *FS) do(name string, op func(c *sftp.Client) error) error {
 	if err2 != nil {
 		return err
 	}
-	return call(c2, gen2)
+	err = call(c2, gen2)
+	var te *opTimeoutError
+	if err == nil || reconcile == nil || isConnError(err) || errors.As(err, &te) {
+		return err
+	}
+	orig := err
+	if rerr := f.conn.bounded(gen2, name+" (checking whether the first attempt went through)", func() error {
+		return reconcile(c2, orig)
+	}); rerr == nil {
+		f.log.Debugf("%s: the first attempt had succeeded before the connection dropped", name)
+		return nil
+	}
+	return orig
 }
 
 func (f *FS) Root() string { return f.root }
@@ -326,7 +354,7 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	from, to := f.resolve(oldpath), f.resolve(newpath)
 	f.files.drop(from)
 	f.files.drop(to)
-	err := f.do("rename "+from+" to "+to, func(c *sftp.Client) error {
+	err := f.doRetry("rename "+from+" to "+to, func(c *sftp.Client) error {
 		// PosixRename replaces the destination atomically. Only fall back if
 		// the server does not implement the OpenSSH extension: any other
 		// failure is a real error and must not cost the caller the
@@ -347,6 +375,16 @@ func (f *FS) Rename(oldpath, newpath string) error {
 			return e
 		}
 		return c.Rename(from, to)
+	}, func(c *sftp.Client, err error) error {
+		// The source is gone and the destination exists: the rename the
+		// lost reply belonged to went through.
+		if _, e := c.Lstat(from); !errors.Is(e, os.ErrNotExist) {
+			return err
+		}
+		if _, e := c.Lstat(to); e != nil {
+			return err
+		}
+		return nil
 	})
 	f.attrs.invalidate(from)
 	f.attrs.invalidate(to)
@@ -359,7 +397,13 @@ func (f *FS) Remove(name string) error {
 	}
 	remote := f.resolve(name)
 	f.files.drop(remote)
-	err := f.do("remove "+remote, func(c *sftp.Client) error { return c.Remove(remote) })
+	err := f.doRetry("remove "+remote, func(c *sftp.Client) error { return c.Remove(remote) },
+		func(_ *sftp.Client, err error) error {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil // removed by the first attempt
+			}
+			return err
+		})
 	f.attrs.invalidate(remote)
 	return err
 }
@@ -399,7 +443,13 @@ func (f *FS) Symlink(target, link string) error {
 		return f.readOnlyErr()
 	}
 	remote := f.resolve(link)
-	err := f.do("symlink "+remote, func(c *sftp.Client) error { return c.Symlink(target, remote) })
+	err := f.doRetry("symlink "+remote, func(c *sftp.Client) error { return c.Symlink(target, remote) },
+		func(c *sftp.Client, err error) error {
+			if got, e := c.ReadLink(remote); e == nil && got == target {
+				return nil // made by the first attempt
+			}
+			return err
+		})
 	f.attrs.invalidate(remote)
 	return err
 }
@@ -441,18 +491,63 @@ func (f *FS) Chtimes(name string, atime, mtime time.Time) error {
 	return err
 }
 
+// statvfsTTL is how long a free-space answer is reused. macOS asks for it
+// constantly (Finder, every save dialog), and it does not change by the
+// second in any way that matters.
+const statvfsTTL = 5 * time.Second
+
+// statvfsCache remembers the last FSSTAT answer, and that the server lacks
+// the extension, so neither costs a round trip on every call.
+type statvfsCache struct {
+	mu          sync.Mutex
+	st          *sftp.StatVFS
+	err         error // a recent failure, reused like a result
+	expires     time.Time
+	unsupported bool
+}
+
+var errNoStatVFS = errors.New("server does not support statvfs.com")
+
 // StatVFS reports free space for the NFS FSSTAT call. Not every server
 // implements the OpenSSH extension, so callers must tolerate an error.
 func (f *FS) StatVFS() (*sftp.StatVFS, error) {
+	sc := f.statvfs
+	sc.mu.Lock()
+	if sc.unsupported {
+		sc.mu.Unlock()
+		return nil, errNoStatVFS
+	}
+	if (sc.st != nil || sc.err != nil) && time.Now().Before(sc.expires) {
+		st, err := sc.st, sc.err
+		sc.mu.Unlock()
+		return st, err
+	}
+	sc.mu.Unlock()
+
 	var st *sftp.StatVFS
 	err := f.do("statvfs "+f.root, func(c *sftp.Client) error {
+		// Servers without the extension do not all say "unsupported";
+		// some fail generically. What they advertise is reliable.
+		if _, ok := c.HasExtension("statvfs@openssh.com"); !ok {
+			return errNoStatVFS
+		}
 		var e error
 		st, e = c.StatVFS(f.root)
 		return e
 	})
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
 	if err != nil {
+		if errors.Is(err, errNoStatVFS) || isUnsupported(err) {
+			sc.unsupported = true
+			f.log.Debugf("statvfs unsupported by the server; reporting a fixed size")
+		}
+		// Some servers advertise the extension and fail it anyway; do not
+		// ask again on every FSSTAT either way.
+		sc.st, sc.err, sc.expires = nil, err, time.Now().Add(statvfsTTL)
 		return nil, err
 	}
+	sc.st, sc.err, sc.expires = st, nil, time.Now().Add(statvfsTTL)
 	return st, nil
 }
 

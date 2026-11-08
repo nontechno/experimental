@@ -20,7 +20,7 @@
   "open_file_limit": 64,
   "uid": 501,
   "gid": 20,
-  "mount_options": "vers=3,tcp,soft,intr,timeo=30,retrans=3,rsize=131072,wsize=131072,locallocks,noresvport,actimeo=1",
+  "mount_options": "vers=3,tcp,soft,intr,timeo=30,retrans=3,rsize=131072,wsize=131072,locallocks,resvport,actimeo=1",
   "mount_sudo": true,
   "unmount_on_exit": true,
   "mount_timeout": "1m",
