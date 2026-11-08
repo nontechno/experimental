@@ -283,15 +283,20 @@ func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (billy.File, erro
 	// the mode of an existing file would briefly widen its permissions.
 	isNew := flag&os.O_CREATE != 0 && !f.exists(name)
 
+	var gen uint64
 	acquire := func() (*openFile, error) {
-		cl, gen, err := f.conn.Client()
+		cl, g, err := f.conn.Client()
 		if err != nil {
 			return nil, err
 		}
-		return f.files.acquire(cl, gen, remote, flag, true)
+		gen = g
+		return f.files.acquire(cl, g, remote, flag, true)
 	}
 	entry, err := acquire()
 	if err != nil && isConnError(err) {
+		// Retire the dead session first, or the retry is handed the same
+		// one whenever the keepalive has not noticed yet.
+		f.conn.Invalidate(gen)
 		f.files.dropAll()
 		f.attrs.clear()
 		entry, err = acquire()
@@ -506,7 +511,7 @@ type statvfsCache struct {
 	unsupported bool
 }
 
-var errNoStatVFS = errors.New("server does not support statvfs.com")
+var errNoStatVFS = errors.New("server does not support statvfs@openssh.com")
 
 // StatVFS reports free space for the NFS FSSTAT call. Not every server
 // implements the OpenSSH extension, so callers must tolerate an error.

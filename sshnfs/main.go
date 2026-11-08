@@ -74,14 +74,34 @@ func run(args []string) int {
 	// to them hang. The first signal asks for an orderly stop, noticed
 	// between startup steps (each of them bounded) or by the wait below; a
 	// second one exits at once, for cleanup that is itself stuck.
+	//
+	// SIGHUP is included because closing the terminal window sends it, and
+	// its default action kills the process with the mounts still in place.
+	// SIGPIPE is ignored for the same reason: by default a write to a stderr
+	// pipe whose reader went away (sshnfs 2>&1 | tee log, tee killed) kills
+	// the process; ignored, the write merely fails.
+	// Under nohup SIGHUP starts out ignored, and must stay so: Notify would
+	// turn it back on and make logging out stop the mounts.
+	signal.Ignore(syscall.SIGPIPE)
 	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	if !signal.Ignored(syscall.SIGHUP) {
+		signal.Notify(sig, syscall.SIGHUP)
+	}
 	stop := make(chan struct{})
 	go func() {
 		s := <-sig
+		if abortPrompt() {
+			// Waiting for a passphrase: nothing is mounted yet, so there is
+			// nothing to clean up, and the prompt would not notice a stop.
+			log.Infof("got %s while waiting for input, exiting", s)
+			stderr.Flush(time.Second)
+			os.Exit(130)
+		}
 		log.Infof("got %s, shutting down (repeat to exit immediately)", s)
 		close(stop)
 		s = <-sig
+		abortPrompt()
 		log.Errorf("got %s again, exiting without finishing cleanup", s)
 		stderr.Flush(time.Second)
 		os.Exit(130)

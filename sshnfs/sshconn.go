@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -442,7 +443,7 @@ func (c *Conn) dialTransport(target *endpoint) (net.Conn, []io.Closer, error) {
 	case len(c.cfg.jumpHops) > 0:
 		return c.dialThroughJumps(target)
 	case c.cfg.ProxyCommand != "" && !isNone(c.cfg.ProxyCommand):
-		conn, err := dialProxyCommand(c.cfg.ProxyCommand, target, c.log)
+		conn, err := dialProxyCommand(c.cfg.ProxyCommand, target, c.log, c.detachHelpers())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -486,7 +487,7 @@ func (c *Conn) dialThroughJumps(target *endpoint) (net.Conn, []io.Closer, error)
 			// The first link has no predecessor to tunnel through, so a
 			// ProxyCommand of its own can be run locally to reach it.
 			c.log.Debugf("dialing jump host %s@%s through its proxy command", hop.User, hop.Addr())
-			nc, err = dialProxyCommand(hop.ProxyCommand, hop, c.log)
+			nc, err = dialProxyCommand(hop.ProxyCommand, hop, c.log, c.detachHelpers())
 			if err != nil {
 				return fail(fmt.Errorf("jump host %s: %w", hop.Addr(), err))
 			}
@@ -715,6 +716,13 @@ func (c *Conn) neverConnected() bool {
 	return c.gen == 0
 }
 
+// detachHelpers reports whether a ProxyCommand started now may be put in a
+// process group of its own: unless this is the first connection and there is
+// a terminal it might need to prompt on.
+func (c *Conn) detachHelpers() bool {
+	return !c.neverConnected() || !term.IsTerminal(int(syscall.Stdin))
+}
+
 // loadKey returns the signer for a key file, parsing (and if need be
 // prompting for) it only the first time in this process.
 func (c *Conn) loadKey(path, passphrase string, interactive bool) (ssh.Signer, error) {
@@ -831,11 +839,41 @@ func knownHostAlgorithms(cb ssh.HostKeyCallback, address string) []string {
 	return algos
 }
 
+// promptState is the terminal state to put back if the process must exit
+// while a prompt has echo turned off; exiting without it leaves the user's
+// shell typing blind.
+type promptState struct {
+	fd int
+	st *term.State
+}
+
+var activePrompt atomic.Pointer[promptState]
+
+// abortPrompt restores the terminal if a prompt is waiting, and reports
+// whether one was. Prompts only happen during the first connections, before
+// anything is mounted, so the caller can simply exit.
+func abortPrompt() bool {
+	p := activePrompt.Swap(nil)
+	if p == nil {
+		return false
+	}
+	term.Restore(p.fd, p.st)
+	fmt.Fprintln(os.Stderr)
+	return true
+}
+
 func promptPassword(prompt string) (string, error) {
 	fd := int(syscall.Stdin)
 	if !term.IsTerminal(fd) {
 		return "", errors.New("stdin is not a terminal, cannot prompt for a secret")
 	}
+	if st, err := term.GetState(fd); err == nil {
+		activePrompt.Store(&promptState{fd: fd, st: st})
+		defer activePrompt.Store(nil)
+	}
+	// Let queued log lines out first, so the prompt is the last thing on
+	// the screen rather than buried under them.
+	stderr.Flush(time.Second)
 	fmt.Fprint(os.Stderr, prompt)
 	b, err := term.ReadPassword(fd)
 	fmt.Fprintln(os.Stderr)

@@ -729,7 +729,7 @@ Run `mount` and `umount` through `sudo`.
 #### `unmount_on_exit`
 **Flag:** `-unmount-on-exit` · **Type:** boolean · **Default:** `true`
 
-Unmount when sshnfs stops (Ctrl-C, SIGTERM, or a fatal error).
+Unmount when sshnfs stops (Ctrl-C, SIGTERM, SIGHUP, or a fatal error).
 
 - **Why keep it on:** once sshnfs exits, the mount has no server behind it, and
   any access to it errors (`soft`) or hangs (`hard`).

@@ -307,7 +307,12 @@ Shutdown closes the SSH connection before the file handles, so `Ctrl-C` does
 not wait on a server that has stopped answering, and `mount`/`umount` are
 killed after their timeout even when sudo's child holds on. If cleanup still
 blocks, for instance `umount` of a `hard` mount, a second `Ctrl-C` exits
-immediately. A failed dial is remembered for a second, so an unreachable host
+immediately. SIGTERM and SIGHUP (the terminal window closing) shut down the
+same way; under `nohup` SIGHUP stays ignored. A closed stderr pipe no longer
+kills the process. Ctrl-C at a passphrase prompt exits at once and restores the
+terminal. A ProxyCommand started on a reconnect, or with no terminal, runs in
+its own process group, so Ctrl-C does not cut the connection before the
+unmount, and closing it kills everything the command started. A failed dial is remembered for a second, so an unreachable host
 does not make every queued request pay its own full timeout.
 
 ## Security
