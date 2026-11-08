@@ -4,6 +4,7 @@
   "ssh_config_file": "~/.ssh/config",
   "known_hosts_file": "~/.ssh/known_hosts",
   "connect_timeout": "15s",
+  "op_timeout": "30s",
   "keepalive_interval": "30s",
   "max_packet": 32768,
   "max_concurrent_requests": 64,

@@ -127,6 +127,7 @@ type Config struct {
 
 	// ----- ssh / sftp tuning -----
 	ConnectTimeout Duration `json:"connect_timeout"`
+	OpTimeout      Duration `json:"op_timeout"` // per sftp request; 0 = wait forever
 	KeepAlive      Duration `json:"keepalive_interval"`
 	MaxPacket      int      `json:"max_packet"`
 	MaxConcurrent  int      `json:"max_concurrent_requests"`
@@ -204,6 +205,7 @@ func DefaultConfig() *Config {
 		UseSSHConfig:         true,
 		SSHConfigFile:        "~/.ssh/config",
 		ConnectTimeout:       Duration(15 * time.Second),
+		OpTimeout:            Duration(30 * time.Second),
 		KeepAlive:            Duration(30 * time.Second),
 		MaxPacket:            32768,
 		MaxConcurrent:        64,
@@ -278,6 +280,7 @@ func (c *Config) bind(fs *flag.FlagSet) {
 	fs.StringVar(&c.ProxyCommand, "proxy-command", c.ProxyCommand, "shell command whose stdin/stdout carry the connection")
 
 	fs.Var(&c.ConnectTimeout, "connect-timeout", "ssh connect, handshake and subsystem timeout")
+	fs.Var(&c.OpTimeout, "op-timeout", "give up on an sftp request after this long and reconnect (0 waits forever)")
 	fs.Var(&c.KeepAlive, "keepalive", "ssh keepalive interval (0 disables)")
 	fs.IntVar(&c.MaxPacket, "max-packet", c.MaxPacket, "maximum sftp packet size in bytes")
 	fs.IntVar(&c.MaxConcurrent, "max-concurrent", c.MaxConcurrent, "maximum concurrent sftp requests")
@@ -631,6 +634,21 @@ func (c *Config) validate() error {
 		if h.User == "" {
 			return fmt.Errorf("proxy_jump %q: no user for %s", c.ProxyJump, h.Host)
 		}
+	}
+	if c.ConnectTimeout <= 0 {
+		// Zero would mean no bound at all on the connect, the handshake and
+		// the subsystem start, so a stalled host could wedge a dial (and
+		// every request queued behind it) forever. ssh config's
+		// "ConnectTimeout 0" ends up here too.
+		c.ConnectTimeout = DefaultConfig().ConnectTimeout
+	}
+	for _, h := range c.jumpHops {
+		if h.ConnectTimeout <= 0 {
+			h.ConnectTimeout = c.ConnectTimeout.D()
+		}
+	}
+	if c.OpTimeout < 0 {
+		return fmt.Errorf("op_timeout must not be negative")
 	}
 	if c.ReconnectDelay < 0 || c.ReconnectMaxDelay < 0 {
 		return fmt.Errorf("reconnect delays must not be negative")

@@ -41,7 +41,7 @@ func NewFS(cfg *Config, conn *Conn, log *Logger, root string) *FS {
 		log:      log,
 		root:     normalizeRoot(root),
 		attrs:    newAttrCache(cfg.AttrCacheTTL.D(), cfg.DirCacheTTL.D()),
-		files:    newFileCache(cfg.FileCacheMax, cfg.FileIdle.D()),
+		files:    newFileCache(cfg.FileCacheMax, cfg.FileIdle.D(), conn.bounded),
 		readOnly: cfg.ReadOnly,
 		uid:      cfg.UID,
 		gid:      cfg.GID,
@@ -82,13 +82,18 @@ func (f *FS) resolve(name string) string {
 }
 
 // do runs an SFTP operation, reconnecting and retrying once if the session
-// turned out to be dead.
-func (f *FS) do(op func(c *sftp.Client) error) error {
+// turned out to be dead. name describes the operation for the log. Each
+// attempt is bounded by the op timeout; a timed-out operation is not retried,
+// since the path that stalled it would most likely stall the retry as well.
+func (f *FS) do(name string, op func(c *sftp.Client) error) error {
+	call := func(c *sftp.Client, gen uint64) error {
+		return f.conn.bounded(gen, name, func() error { return op(c) })
+	}
 	c, gen, err := f.conn.Client()
 	if err != nil {
 		return err
 	}
-	err = op(c)
+	err = call(c, gen)
 	if err == nil || !isConnError(err) {
 		return err
 	}
@@ -96,11 +101,11 @@ func (f *FS) do(op func(c *sftp.Client) error) error {
 	f.files.dropAll()
 	f.attrs.clear()
 
-	c2, _, err2 := f.conn.Client()
+	c2, gen2, err2 := f.conn.Client()
 	if err2 != nil {
 		return err
 	}
-	return op(c2)
+	return call(c2, gen2)
 }
 
 func (f *FS) Root() string { return f.root }
@@ -129,7 +134,7 @@ func (f *FS) Stat(name string) (os.FileInfo, error) {
 		return fi, nil
 	}
 	var fi os.FileInfo
-	err := f.do(func(c *sftp.Client) error {
+	err := f.do("stat "+remote, func(c *sftp.Client) error {
 		var e error
 		fi, e = c.Stat(remote)
 		return e
@@ -148,7 +153,7 @@ func (f *FS) Lstat(name string) (os.FileInfo, error) {
 		return fi, nil
 	}
 	var fi os.FileInfo
-	err := f.do(func(c *sftp.Client) error {
+	err := f.do("lstat "+remote, func(c *sftp.Client) error {
 		var e error
 		fi, e = c.Lstat(remote)
 		return e
@@ -167,7 +172,7 @@ func (f *FS) ReadDir(name string) ([]os.FileInfo, error) {
 		return list, nil
 	}
 	var raw []os.FileInfo
-	err := f.do(func(c *sftp.Client) error {
+	err := f.do("readdir "+remote, func(c *sftp.Client) error {
 		var e error
 		raw, e = c.ReadDir(remote)
 		return e
@@ -193,7 +198,7 @@ func (f *FS) ReadDir(name string) ([]os.FileInfo, error) {
 func (f *FS) Readlink(name string) (string, error) {
 	remote := f.resolve(name)
 	var target string
-	err := f.do(func(c *sftp.Client) error {
+	err := f.do("readlink "+remote, func(c *sftp.Client) error {
 		var e error
 		target, e = c.ReadLink(remote)
 		return e
@@ -270,7 +275,7 @@ func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (billy.File, erro
 	if isNew && perm != 0 {
 		// SFTP's open does not carry a mode, so apply it explicitly. A failure
 		// here is not fatal: the file exists and is usable.
-		if err := f.do(func(c *sftp.Client) error { return c.Chmod(remote, perm) }); err != nil {
+		if err := f.do("chmod "+remote, func(c *sftp.Client) error { return c.Chmod(remote, perm) }); err != nil {
 			f.log.Debugf("chmod %s after create: %v", remote, err)
 		}
 	}
@@ -321,7 +326,7 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	from, to := f.resolve(oldpath), f.resolve(newpath)
 	f.files.drop(from)
 	f.files.drop(to)
-	err := f.do(func(c *sftp.Client) error {
+	err := f.do("rename "+from+" to "+to, func(c *sftp.Client) error {
 		// PosixRename replaces the destination atomically. Only fall back if
 		// the server does not implement the OpenSSH extension: any other
 		// failure is a real error and must not cost the caller the
@@ -354,7 +359,7 @@ func (f *FS) Remove(name string) error {
 	}
 	remote := f.resolve(name)
 	f.files.drop(remote)
-	err := f.do(func(c *sftp.Client) error { return c.Remove(remote) })
+	err := f.do("remove "+remote, func(c *sftp.Client) error { return c.Remove(remote) })
 	f.attrs.invalidate(remote)
 	return err
 }
@@ -376,13 +381,13 @@ func (f *FS) MkdirAll(name string, perm os.FileMode) error {
 		}
 		return &os.PathError{Op: "mkdir", Path: name, Err: syscall.ENOTDIR}
 	}
-	err := f.do(func(c *sftp.Client) error { return c.MkdirAll(remote) })
+	err := f.do("mkdir "+remote, func(c *sftp.Client) error { return c.MkdirAll(remote) })
 	f.attrs.invalidate(remote)
 	if err != nil {
 		return err
 	}
 	if perm != 0 {
-		if err := f.do(func(c *sftp.Client) error { return c.Chmod(remote, perm) }); err != nil {
+		if err := f.do("chmod "+remote, func(c *sftp.Client) error { return c.Chmod(remote, perm) }); err != nil {
 			f.log.Debugf("chmod %s after mkdir: %v", remote, err)
 		}
 	}
@@ -394,7 +399,7 @@ func (f *FS) Symlink(target, link string) error {
 		return f.readOnlyErr()
 	}
 	remote := f.resolve(link)
-	err := f.do(func(c *sftp.Client) error { return c.Symlink(target, remote) })
+	err := f.do("symlink "+remote, func(c *sftp.Client) error { return c.Symlink(target, remote) })
 	f.attrs.invalidate(remote)
 	return err
 }
@@ -406,7 +411,7 @@ func (f *FS) Chmod(name string, mode os.FileMode) error {
 		return f.readOnlyErr()
 	}
 	remote := f.resolve(name)
-	err := f.do(func(c *sftp.Client) error { return c.Chmod(remote, mode) })
+	err := f.do("chmod "+remote, func(c *sftp.Client) error { return c.Chmod(remote, mode) })
 	f.attrs.invalidate(remote)
 	return err
 }
@@ -416,7 +421,7 @@ func (f *FS) Chown(name string, uid, gid int) error {
 		return f.readOnlyErr()
 	}
 	remote := f.resolve(name)
-	err := f.do(func(c *sftp.Client) error { return c.Chown(remote, uid, gid) })
+	err := f.do("chown "+remote, func(c *sftp.Client) error { return c.Chown(remote, uid, gid) })
 	f.attrs.invalidate(remote)
 	return err
 }
@@ -431,7 +436,7 @@ func (f *FS) Chtimes(name string, atime, mtime time.Time) error {
 		return f.readOnlyErr()
 	}
 	remote := f.resolve(name)
-	err := f.do(func(c *sftp.Client) error { return c.Chtimes(remote, atime, mtime) })
+	err := f.do("chtimes "+remote, func(c *sftp.Client) error { return c.Chtimes(remote, atime, mtime) })
 	f.attrs.invalidate(remote)
 	return err
 }
@@ -440,7 +445,7 @@ func (f *FS) Chtimes(name string, atime, mtime time.Time) error {
 // implements the OpenSSH extension, so callers must tolerate an error.
 func (f *FS) StatVFS() (*sftp.StatVFS, error) {
 	var st *sftp.StatVFS
-	err := f.do(func(c *sftp.Client) error {
+	err := f.do("statvfs "+f.root, func(c *sftp.Client) error {
 		var e error
 		st, e = c.StatVFS(f.root)
 		return e

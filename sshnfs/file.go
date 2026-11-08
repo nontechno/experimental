@@ -37,14 +37,21 @@ type fileCache struct {
 	idle    time.Duration
 	stop    chan struct{}
 	once    sync.Once
+
+	// bound runs a remote call under the op timeout (Conn.bounded).
+	bound func(gen uint64, op string, fn func() error) error
 }
 
-func newFileCache(max int, idle time.Duration) *fileCache {
+func newFileCache(max int, idle time.Duration, bound func(gen uint64, op string, fn func() error) error) *fileCache {
+	if bound == nil {
+		bound = func(_ uint64, _ string, fn func() error) error { return fn() }
+	}
 	c := &fileCache{
 		entries: make(map[string]*openFile),
 		max:     max,
 		idle:    idle,
 		stop:    make(chan struct{}),
+		bound:   bound,
 	}
 	if idle > 0 {
 		go c.janitor()
@@ -69,7 +76,7 @@ func (c *fileCache) acquire(cl *sftp.Client, gen uint64, remotePath string, flag
 
 	if pool {
 		key := cacheKey(remotePath, writable)
-		var stale *sftp.File
+		var stale *openFile
 		c.mu.Lock()
 		if e, ok := c.entries[key]; ok && !e.dead {
 			if e.gen == gen {
@@ -82,14 +89,14 @@ func (c *fileCache) acquire(cl *sftp.Client, gen uint64, remotePath string, flag
 			delete(c.entries, key)
 			e.dead = true
 			if e.refs == 0 {
-				stale = e.f
+				stale = e
 			}
 		}
 		c.mu.Unlock()
 		if stale != nil {
-			// Never close a remote handle while holding the cache lock: it is
-			// a network round trip and would stall every other file operation.
-			stale.Close()
+			// It belongs to a session that is already gone, so there is
+			// nothing to wait for.
+			closeLater([]*openFile{stale})
 		}
 	}
 
@@ -102,7 +109,12 @@ func (c *fileCache) acquire(cl *sftp.Client, gen uint64, remotePath string, flag
 			openFlag = os.O_RDONLY
 		}
 	}
-	f, err := cl.OpenFile(remotePath, openFlag)
+	var f *sftp.File
+	err := c.bound(gen, "open "+remotePath, func() error {
+		var e error
+		f, e = cl.OpenFile(remotePath, openFlag)
+		return e
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -122,19 +134,17 @@ func (c *fileCache) acquire(cl *sftp.Client, gen uint64, remotePath string, flag
 	}
 
 	c.mu.Lock()
-	var toClose []*sftp.File
+	var toClose []*openFile
 	if old, ok := c.entries[e.key]; ok {
 		old.dead = true
 		if old.refs == 0 {
-			toClose = append(toClose, old.f)
+			toClose = append(toClose, old)
 		}
 	}
 	c.entries[e.key] = e
 	toClose = append(toClose, c.evictLocked()...)
 	c.mu.Unlock()
-	for _, f := range toClose {
-		f.Close()
-	}
+	c.closeHandles(toClose)
 	return e, nil
 }
 
@@ -143,7 +153,7 @@ func (c *fileCache) release(e *openFile) error {
 		return nil
 	}
 	if !e.pooled {
-		return e.f.Close()
+		return c.closeOne(e)
 	}
 	c.mu.Lock()
 	e.refs--
@@ -156,53 +166,79 @@ func (c *fileCache) release(e *openFile) error {
 	}
 	c.mu.Unlock()
 	if dead {
-		return e.f.Close()
+		return c.closeOne(e)
 	}
 	return nil
+}
+
+// closeOne closes a remote handle. Close is a round trip like any other and
+// a stuck server never answers it, so it runs under the op timeout. Callers
+// must not hold the cache lock.
+func (c *fileCache) closeOne(e *openFile) error {
+	return c.bound(e.gen, "close "+e.path, e.f.Close)
+}
+
+func (c *fileCache) closeHandles(es []*openFile) {
+	for _, e := range es {
+		c.closeOne(e)
+	}
+}
+
+// closeLater closes handles whose session is already gone (or going), in the
+// background. Their Close fails fast once the transport is down; nothing
+// should wait on it either way.
+func closeLater(es []*openFile) {
+	if len(es) == 0 {
+		return
+	}
+	go func() {
+		for _, e := range es {
+			e.f.Close()
+		}
+	}()
 }
 
 // drop forgets any pooled handles for a path, e.g. after it was removed,
 // renamed or truncated behind our back.
 func (c *fileCache) drop(remotePath string) {
 	c.mu.Lock()
-	var toClose []*sftp.File
+	var toClose []*openFile
 	for _, writable := range []bool{false, true} {
 		key := cacheKey(remotePath, writable)
 		if e, ok := c.entries[key]; ok {
 			delete(c.entries, key)
 			e.dead = true
 			if e.refs == 0 {
-				toClose = append(toClose, e.f)
+				toClose = append(toClose, e)
 			}
 		}
 	}
 	c.mu.Unlock()
-	for _, f := range toClose {
-		f.Close()
-	}
+	// Synchronous, so a rename or remove that follows does not race the
+	// close on servers that refuse to touch open files.
+	c.closeHandles(toClose)
 }
 
-// dropAll invalidates every pooled handle, used after the SSH session died.
+// dropAll invalidates every pooled handle, used after the SSH session died
+// and at shutdown. It never waits on the server.
 func (c *fileCache) dropAll() {
 	c.mu.Lock()
-	var toClose []*sftp.File
+	var toClose []*openFile
 	for key, e := range c.entries {
 		delete(c.entries, key)
 		e.dead = true
 		if e.refs == 0 {
-			toClose = append(toClose, e.f)
+			toClose = append(toClose, e)
 		}
 	}
 	c.mu.Unlock()
-	for _, f := range toClose {
-		f.Close()
-	}
+	closeLater(toClose)
 }
 
 // evictLocked trims the pool to its limit and returns the handles the caller
 // must close after releasing the lock.
-func (c *fileCache) evictLocked() []*sftp.File {
-	var toClose []*sftp.File
+func (c *fileCache) evictLocked() []*openFile {
+	var toClose []*openFile
 	for len(c.entries) > c.max {
 		var oldest *openFile
 		for _, e := range c.entries {
@@ -218,7 +254,7 @@ func (c *fileCache) evictLocked() []*sftp.File {
 		}
 		delete(c.entries, oldest.key)
 		oldest.dead = true
-		toClose = append(toClose, oldest.f)
+		toClose = append(toClose, oldest)
 	}
 	return toClose
 }
@@ -236,18 +272,16 @@ func (c *fileCache) janitor() {
 			return
 		case now := <-t.C:
 			c.mu.Lock()
-			var toClose []*sftp.File
+			var toClose []*openFile
 			for key, e := range c.entries {
 				if e.refs == 0 && now.Sub(e.last) > c.idle {
 					delete(c.entries, key)
 					e.dead = true
-					toClose = append(toClose, e.f)
+					toClose = append(toClose, e)
 				}
 			}
 			c.mu.Unlock()
-			for _, f := range toClose {
-				f.Close()
-			}
+			c.closeHandles(toClose)
 		}
 	}
 }
@@ -274,13 +308,23 @@ type File struct {
 
 func (f *File) Name() string { return f.name }
 
+// remoteCall runs one call on the shared handle under the op timeout.
+func (f *File) remoteCall(op string, fn func() error) error {
+	return f.fs.conn.bounded(f.entry.gen, op+" "+f.remote, fn)
+}
+
 func (f *File) Read(p []byte) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
 		return 0, os.ErrClosed
 	}
-	n, err := f.entry.f.ReadAt(p, f.offset)
+	var n int
+	err := f.remoteCall("read", func() error {
+		var e error
+		n, e = f.entry.f.ReadAt(p, f.offset)
+		return e
+	})
 	f.offset += int64(n)
 	if err != nil && !errors.Is(err, io.EOF) {
 		f.noteError(err)
@@ -295,7 +339,12 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 	if closed {
 		return 0, os.ErrClosed
 	}
-	n, err := f.entry.f.ReadAt(p, off)
+	var n int
+	err := f.remoteCall("read", func() error {
+		var e error
+		n, e = f.entry.f.ReadAt(p, off)
+		return e
+	})
 	if err != nil && !errors.Is(err, io.EOF) {
 		f.noteError(err)
 	}
@@ -311,7 +360,12 @@ func (f *File) Write(p []byte) (int, error) {
 	if !f.writable {
 		return 0, os.ErrPermission
 	}
-	n, err := f.entry.f.WriteAt(p, f.offset)
+	var n int
+	err := f.remoteCall("write", func() error {
+		var e error
+		n, e = f.entry.f.WriteAt(p, f.offset)
+		return e
+	})
 	f.offset += int64(n)
 	f.fs.attrs.invalidateAttr(f.remote)
 	if err != nil {
@@ -330,7 +384,12 @@ func (f *File) WriteAt(p []byte, off int64) (int, error) {
 	if !writable {
 		return 0, os.ErrPermission
 	}
-	n, err := f.entry.f.WriteAt(p, off)
+	var n int
+	err := f.remoteCall("write", func() error {
+		var e error
+		n, e = f.entry.f.WriteAt(p, off)
+		return e
+	})
 	f.fs.attrs.invalidateAttr(f.remote)
 	if err != nil {
 		f.noteError(err)
@@ -350,7 +409,12 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		f.offset += offset
 	case io.SeekEnd:
-		st, err := f.entry.f.Stat()
+		var st os.FileInfo
+		err := f.remoteCall("fstat", func() error {
+			var e error
+			st, e = f.entry.f.Stat()
+			return e
+		})
 		if err != nil {
 			f.noteError(err)
 			return 0, err
@@ -376,7 +440,7 @@ func (f *File) Truncate(size int64) error {
 	if !writable {
 		return os.ErrPermission
 	}
-	err := f.entry.f.Truncate(size)
+	err := f.remoteCall("truncate", func() error { return f.entry.f.Truncate(size) })
 	f.fs.attrs.invalidateAttr(f.remote)
 	if err != nil {
 		f.noteError(err)

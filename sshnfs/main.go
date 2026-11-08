@@ -97,19 +97,29 @@ func run(args []string) int {
 		}
 	}
 
-	sig := make(chan os.Signal, 1)
+	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 
 	exit := 0
 	select {
 	case s := <-sig:
-		log.Infof("got %s, shutting down", s)
+		log.Infof("got %s, shutting down (repeat to exit immediately)", s)
 	case err := <-serveErr:
 		if err != nil {
 			log.Errorf("nfs server stopped: %v", err)
 			exit = 1
 		}
 	}
+
+	// Cleanup can still block where we have no control, e.g. umount on a
+	// hard-mounted share whose server stopped answering. A second signal is
+	// the way out; without this, signal.Notify would swallow it and only
+	// kill -9 would end the process.
+	go func() {
+		s := <-sig
+		log.Errorf("got %s again, exiting without finishing cleanup", s)
+		os.Exit(130)
+	}()
 
 	shutdown()
 	return exit
@@ -235,20 +245,34 @@ func (s *server) close() {
 		}
 	}
 	s.listener.Close()
-	s.fs.Close()
+	// The connection goes before the file pool: closing pooled handles is a
+	// round trip each, which a stuck server never answers, whereas once the
+	// transport is down they fail at once.
 	s.conn.Close()
+	s.fs.Close()
 }
 
 // resolveRoot connects eagerly so configuration problems surface immediately,
 // and turns an empty or ~-relative remote path into an absolute one.
 func resolveRoot(conn *Conn, cfg *Config) (string, error) {
-	client, _, err := conn.Client()
+	client, gen, err := conn.Client()
 	if err != nil {
 		return "", err
 	}
+	// Bounded like every other request: a remote path on a hung or locked
+	// filesystem would otherwise stall startup forever.
+	getwd := func() (string, error) {
+		var wd string
+		err := conn.bounded(gen, "getwd", func() error {
+			var e error
+			wd, e = client.Getwd()
+			return e
+		})
+		return wd, err
+	}
 	root := cfg.RemotePath
 	if root == "" || root == "~" || strings.HasPrefix(root, "~/") {
-		home, err := client.Getwd()
+		home, err := getwd()
 		if err != nil {
 			return "", fmt.Errorf("determine remote home directory: %w", err)
 		}
@@ -259,13 +283,18 @@ func resolveRoot(conn *Conn, cfg *Config) (string, error) {
 		}
 	}
 	if !path.IsAbs(root) {
-		wd, err := client.Getwd()
+		wd, err := getwd()
 		if err != nil {
 			return "", fmt.Errorf("determine remote working directory: %w", err)
 		}
 		root = path.Join(wd, root)
 	}
-	fi, err := client.Stat(root)
+	var fi os.FileInfo
+	err = conn.bounded(gen, "stat "+root, func() error {
+		var e error
+		fi, e = client.Stat(root)
+		return e
+	})
 	if err != nil {
 		return "", fmt.Errorf("remote path %s: %w", root, err)
 	}

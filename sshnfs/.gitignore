@@ -1,0 +1,12 @@
+go.work
+*.exe
+go.sum
+
+*.db
+*.db-shm
+*.db-wal
+
+task.txt
+
+*.zip
+sshnfs-darwin-arm64

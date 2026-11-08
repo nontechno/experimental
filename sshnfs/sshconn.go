@@ -41,10 +41,28 @@ type Conn struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
+	// Secrets gathered during the first connection, so a reconnect never has
+	// to prompt. Only touched from dial, which runs under the dialing lock.
+	signers   map[string]ssh.Signer // parsed private keys by path
+	passwords map[string]string     // by user@host:port
+
 	// onReconnect is called after a successful redial so caches keyed on the
 	// old session can be dropped.
 	onReconnect func()
 }
+
+// opTimeoutError reports a remote operation that got no reply in time. The
+// session it ran on has been torn down by the time the caller sees it.
+type opTimeoutError struct {
+	op    string
+	after time.Duration
+}
+
+func (e *opTimeoutError) Error() string {
+	return fmt.Sprintf("%s: no reply from the server within %s", e.op, e.after)
+}
+
+func (e *opTimeoutError) Timeout() bool { return true }
 
 // dialBackoff is how long a failed dial is remembered. Without it, an
 // unreachable host makes every NFS request queue behind its own full
@@ -52,7 +70,41 @@ type Conn struct {
 const dialBackoff = time.Second
 
 func NewConn(cfg *Config, log *Logger) *Conn {
-	return &Conn{cfg: cfg, log: log, done: make(chan struct{})}
+	return &Conn{
+		cfg:       cfg,
+		log:       log,
+		done:      make(chan struct{}),
+		signers:   map[string]ssh.Signer{},
+		passwords: map[string]string{},
+	}
+}
+
+// bounded runs one remote operation on the session identified by gen and
+// gives up on it after the configured op timeout.
+//
+// A stalled reply does not look like a dead connection: sshd still answers
+// keepalives while its sftp-server is stuck, say in a stat of a path on a
+// hung or locked filesystem. And because sftp-server handles one request at
+// a time, everything queued behind the stuck request is stuck too. So on
+// timeout the whole session is dropped. That fails the abandoned operation
+// (and anything else in flight) promptly instead of leaking it, and the
+// usual reconnection brings up a fresh sftp-server.
+func (c *Conn) bounded(gen uint64, op string, fn func() error) error {
+	d := c.cfg.OpTimeout.D()
+	if d <= 0 {
+		return fn()
+	}
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-t.C:
+	}
+	c.drop(gen, fmt.Sprintf("%s: no reply within %s, dropping the ssh session", op, d))
+	return &opTimeoutError{op: op, after: d}
 }
 
 // Client returns a live sftp client, dialing if necessary.
@@ -139,6 +191,11 @@ func (c *Conn) connect(ignoreBackoff bool) (*sftp.Client, uint64, error) {
 // Invalidate tears down the session identified by gen so the next Client call
 // redials. Calls referring to an older generation are ignored.
 func (c *Conn) Invalidate(gen uint64) {
+	c.drop(gen, "ssh connection lost")
+}
+
+// drop is Invalidate with a reason for the log.
+func (c *Conn) drop(gen uint64, why string) {
 	c.mu.Lock()
 	if c.gen != gen || c.sftp == nil {
 		c.mu.Unlock()
@@ -149,18 +206,30 @@ func (c *Conn) Invalidate(gen uint64) {
 	c.mu.Unlock()
 
 	if c.cfg.Reconnect {
-		c.log.Warnf("ssh connection lost, reconnecting in %s", c.cfg.ReconnectDelay)
+		c.log.Warnf("%s; reconnecting in %s", why, c.cfg.ReconnectDelay)
 	} else {
-		c.log.Warnf("ssh connection lost, will reconnect on the next request")
+		c.log.Warnf("%s; will reconnect on the next request", why)
 	}
-	if sftpClient != nil {
-		sftpClient.Close()
-	}
+	teardown(sshClient, sftpClient, extra)
+	c.scheduleReconnect()
+}
+
+// teardown closes a session without waiting on the peer. The transport goes
+// first: closing the sftp client first sends a channel close and then waits
+// for the server to finish, which a stuck sftp-server never does. Once the
+// transport is gone every pending sftp request fails at once, so the sftp
+// client's own Close has nothing left to wait for; it still runs in the
+// background in case a jump host is slow to tear its channel down.
+func teardown(sshClient *ssh.Client, sftpClient *sftp.Client, extra []io.Closer) error {
+	var err error
 	if sshClient != nil {
-		sshClient.Close()
+		err = sshClient.Close()
 	}
 	closeAll(extra)
-	c.scheduleReconnect()
+	if sftpClient != nil {
+		go sftpClient.Close()
+	}
+	return err
 }
 
 // scheduleReconnect starts the background reconnector, unless it is disabled,
@@ -230,17 +299,7 @@ func (c *Conn) Close() error {
 	c.sftp, c.ssh, c.extra = nil, nil, nil
 	c.mu.Unlock()
 
-	var err error
-	if sftpClient != nil {
-		err = sftpClient.Close()
-	}
-	if sshClient != nil {
-		if e := sshClient.Close(); err == nil {
-			err = e
-		}
-	}
-	closeAll(extra)
-	return err
+	return teardown(sshClient, sftpClient, extra)
 }
 
 // closeAll shuts down jump-host clients in reverse order, innermost first.
@@ -478,9 +537,16 @@ func (c *Conn) authMethods(e *endpoint) ([]ssh.AuthMethod, error) {
 		}
 	}
 
+	// Prompting is only allowed while making the very first connection, when
+	// the user is watching. A reconnect runs in the background, or on an NFS
+	// request with the dial lock held; a prompt there would block every
+	// request behind a question nobody sees. Everything entered during the
+	// first connection is remembered, so reconnects do not need to ask.
+	interactive := c.neverConnected()
+
 	explicitKeys := len(e.IdentityFiles) > 0
 	for _, path := range identityFiles(e) {
-		signer, err := loadPrivateKey(path, e.Passphrase)
+		signer, err := c.loadKey(path, e.Passphrase, interactive)
 		if err != nil {
 			if explicitKeys {
 				// Explicitly requested: a failure here is fatal.
@@ -494,15 +560,22 @@ func (c *Conn) authMethods(e *endpoint) ([]ssh.AuthMethod, error) {
 	}
 
 	password := e.Password
+	secretKey := e.User + "@" + e.Addr()
+	if password == "" {
+		password = c.passwords[secretKey]
+	}
 	if password == "" && e.AskPassword {
+		if !interactive {
+			return nil, fmt.Errorf("%s needs a password, which can only be prompted for on the first connection (use SSHNFS_PASSWORD or a key)", secretKey)
+		}
 		p, err := promptPassword(fmt.Sprintf("%s@%s password: ", e.User, e.Host))
 		if err != nil {
 			return nil, err
 		}
 		password = p
-		if e.Host == c.cfg.Host {
-			c.cfg.Password = p // reuse it when reconnecting
-		}
+		// Remembered per hop, so a jump host's password is not asked for
+		// again when the chain is rebuilt.
+		c.passwords[secretKey] = p
 	}
 	if password != "" {
 		methods = append(methods,
@@ -545,7 +618,32 @@ func identityFiles(e *endpoint) []string {
 	return out
 }
 
-func loadPrivateKey(path, passphrase string) (ssh.Signer, error) {
+// neverConnected reports whether no session has been established yet, which
+// is the only time prompting on the terminal is allowed.
+func (c *Conn) neverConnected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen == 0
+}
+
+// loadKey returns the signer for a key file, parsing (and if need be
+// prompting for) it only the first time. Called from dial, under the dialing
+// lock.
+func (c *Conn) loadKey(path, passphrase string, interactive bool) (ssh.Signer, error) {
+	if s, ok := c.signers[path]; ok {
+		return s, nil
+	}
+	s, err := loadPrivateKey(path, passphrase, interactive)
+	if err != nil {
+		return nil, err
+	}
+	c.signers[path] = s
+	return s, nil
+}
+
+// loadPrivateKey parses a key file. An encrypted key with no passphrase
+// given is prompted for only when interactive is set.
+func loadPrivateKey(path, passphrase string, interactive bool) (ssh.Signer, error) {
 	pem, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read key %s: %w", path, err)
@@ -563,6 +661,9 @@ func loadPrivateKey(path, passphrase string) (ssh.Signer, error) {
 	}
 	var missing *ssh.PassphraseMissingError
 	if errors.As(err, &missing) {
+		if !interactive {
+			return nil, fmt.Errorf("key %s is encrypted and no passphrase is known; prompting is only possible on the first connection (use SSHNFS_PASSPHRASE or ssh-agent)", path)
+		}
 		p, perr := promptPassword(fmt.Sprintf("passphrase for %s: ", path))
 		if perr != nil {
 			return nil, fmt.Errorf("key %s is encrypted: %w", path, perr)

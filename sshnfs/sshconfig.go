@@ -220,7 +220,8 @@ func (c *Config) applySSHConfig() error {
 	}
 
 	if !c.isExplicit("connect_timeout") {
-		if d, ok := sshSeconds(set.get(alias, "ConnectTimeout")); ok {
+		// "ConnectTimeout 0" would mean no timeout at all; keep ours.
+		if d, ok := sshSeconds(set.get(alias, "ConnectTimeout")); ok && d > 0 {
 			c.ConnectTimeout = Duration(d)
 		}
 	}

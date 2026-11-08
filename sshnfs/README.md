@@ -208,6 +208,7 @@ See `config.example.json`. Selected options:
 | `-listen` | `listen` | NFS listen address (default `127.0.0.1:0`) |
 | `-read-only` | `read_only` | refuse every mutating operation |
 | `-uid`, `-gid` | `uid`, `gid` | squash ownership; `-1` passes the remote ids through |
+| `-op-timeout` | `op_timeout` | give up on an SFTP request after this long and reconnect (default `30s`, `0` waits forever) |
 | `-attr-cache`, `-dir-cache` | `attr_cache_ttl`, `dir_cache_ttl` | metadata caching (`0` disables) |
 | `-open-file-idle`, `-open-file-limit` | `open_file_idle`, `open_file_limit` | SFTP handle pool |
 | `-mount`, `-mount-options`, `-mount-sudo` | `mount_point`, … | local mount |
@@ -253,7 +254,33 @@ if you would rather have operations block until the link comes back.
 
 `-connect-timeout` bounds the TCP connect, the SSH handshake *and* the SFTP
 subsystem start, so a host that accepts connections and then stalls cannot wedge
-the server. A failed dial is remembered for a second, so an unreachable host
+the server. A value of `0`, including `ConnectTimeout 0` in `~/.ssh/config`,
+means the default (15s), not "no timeout".
+
+`-op-timeout` bounds every SFTP request once connected, including the closing
+of file handles. This catches a failure that keepalives cannot see. If the
+remote path is on a hung or locked filesystem, `sftp-server` blocks in that
+`stat` or `open`, but sshd keeps answering keepalives, so the link looks
+healthy. And because `sftp-server` and go-nfs both handle one request at a
+time, a single stuck request freezes the whole mount. When a request times out,
+the session is dropped: the request (and anything else in flight) fails with
+an I/O error, and reconnection brings up a fresh `sftp-server`. The path that
+stalled will most likely stall again, so it is not retried. Each further access
+to it costs one timeout and one reconnect, and briefly fails other requests that
+were in flight at that moment. Set the timeout above your slowest legitimate
+operation; `0` restores the old wait-forever behaviour.
+
+Passphrases and passwords are only ever prompted for during the first
+connection. Whatever was entered is remembered, per key file and per host, so
+a reconnect, which happens in the background, never waits on the terminal.
+Use `SSHNFS_PASSPHRASE`, `SSHNFS_PASSWORD` or ssh-agent for keys that were not
+needed the first time.
+
+Shutdown closes the SSH connection before the file handles, so `Ctrl-C` does
+not wait on a server that has stopped answering, and `mount`/`umount` are
+killed after their timeout even when sudo's child holds on. If cleanup still
+blocks, for instance `umount` of a `hard` mount, a second `Ctrl-C` exits
+immediately. A failed dial is remembered for a second, so an unreachable host
 does not make every queued request pay its own full timeout.
 
 ## Security

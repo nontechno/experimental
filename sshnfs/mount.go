@@ -51,12 +51,29 @@ func MountCommand(cfg *Config, host string, port int, mountPoint string) []strin
 	return argv
 }
 
-func Mount(ctx context.Context, cfg *Config, host string, port int) error {
-	argv := MountCommand(cfg, host, port, cfg.MountPoint)
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+// waitDelay is how long a mount or umount may hold on to its output after
+// its context expired. Killing sudo does not kill the mount_nfs or umount it
+// started, and that child keeps our output pipe open, so without a delay
+// CombinedOutput would wait for it indefinitely, timeout or not.
+const waitDelay = 5 * time.Second
+
+// runBounded runs argv with a timeout that holds even when the command's
+// children outlive it.
+func runBounded(ctx context.Context, timeout time.Duration, argv []string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.WaitDelay = waitDelay
 	out, err := cmd.CombinedOutput()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("no result after %s (%v)", timeout, err)
+	}
+	return out, err
+}
+
+func Mount(ctx context.Context, cfg *Config, host string, port int) error {
+	argv := MountCommand(cfg, host, port, cfg.MountPoint)
+	out, err := runBounded(ctx, 60*time.Second, argv)
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		hint := ""
@@ -90,9 +107,7 @@ func Unmount(cfg *Config) error {
 		if cfg.MountSudo {
 			argv = append([]string{"sudo"}, argv...)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
-		cancel()
+		out, err := runBounded(context.Background(), 30*time.Second, argv)
 		if err == nil {
 			return nil
 		}
