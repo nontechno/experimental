@@ -45,7 +45,10 @@ sshnfs -config ~/.config/sshnfs.json
 ```
 
 The remote path defaults to the login directory, so `sshnfs me@host` exports
-`$HOME` on the server. `Ctrl-C` unmounts and disconnects.
+`$HOME` on the server. `Ctrl-C` unmounts and disconnects. The target is split
+the way scp does it: the user ends at the last `@` before the host, so
+`jdoe@corp.example@winhost:/data` works, and an IPv6 address goes in brackets,
+`me@[2001:db8::7]:/srv`.
 
 ### Mounting needs root on macOS
 
@@ -72,7 +75,8 @@ is not implemented server-side).
 
 A host given on the command line or in the config file is looked up as an alias
 first, so the settings you already keep for `ssh` are reused. These keywords are
-honoured, with the usual `%h`/`%p`/`%r`/`%d` token expansion:
+honoured, with the usual `%h`, `%p`, `%r`, `%n`, `%d`, `%l`, `%L` and `%%` token
+expansion:
 
 `HostName`, `Port`, `User`, `IdentityFile` (repeatable), `UserKnownHostsFile`,
 `StrictHostKeyChecking`, `ConnectTimeout`, `ServerAliveInterval`.
@@ -81,7 +85,8 @@ honoured, with the usual `%h`/`%p`/`%r`/`%d` token expansion:
 the file (`ControlMaster`, `ForwardAgent`, `RemoteCommand`) is ignored. The
 user file is read first, then `/etc/ssh/ssh_config`; the
 first file to define a keyword wins, as in ssh. `Include` and `Host` patterns
-(`build*`, `!except`) work.
+(`build*`, `!except`) work. `Match` blocks are skipped: their settings never
+apply.
 
 ssh config only fills in what you did not state yourself: a flag or a config
 file key always wins. `IdentityFile` entries that do not exist on disk are
@@ -130,7 +135,8 @@ command is skipped (logged at debug). Cycles are reported rather than followed,
 chains are capped at eight hops and nesting at eight levels.
 
 `ProxyCommand` runs through `/bin/sh` with the usual `%h`, `%p` and `%r` tokens
-expanded, and its stderr is surfaced in the log — that output is usually the
+expanded (once, when the configuration is loaded, so `-print-config` shows the
+final command), and its stderr is surfaced in the log — that output is usually the
 only clue when a jump fails. Note that this means a config file can execute an
 arbitrary shell command, exactly as ssh's own does.
 
@@ -183,16 +189,28 @@ If any mount fails to come up, the ones already mounted are unmounted and the
 process exits, so you never end up half-mounted. `Ctrl-C` tears all of them
 down.
 
+The hosts can just as well be described entirely in `~/.ssh/config`:
+[`example.multi-host.json`](example.multi-host.json) names only aliases, and
+[`example.multi-host.ssh_config`](example.multi-host.ssh_config) supplies
+their addresses, ports, users, keys, a jump host and per-host timeouts.
+For that to work, leave `user`, `port`, `identity_files` and the like out of
+the JSON: any key written there, even with its default value, stops ssh config
+from supplying it, for every mount that inherits it.
+
 ## Configuration
 
 Every setting can come from a JSON config file, a command-line flag, or both.
-Precedence is **defaults → ~/.ssh/config → config file → flags**, and flags may
-be interspersed with positional arguments.
+Precedence is **defaults → ~/.ssh/config → config file → flags → `mounts`
+entries**, and flags may be interspersed with positional arguments. ssh config
+only fills in keys that none of the others set.
 
 ```sh
 sshnfs -example-config > ~/.config/sshnfs.json   # start from the defaults
 sshnfs -config ~/.config/sshnfs.json -print-config  # show what would be used
 ```
+
+`-print-config` connects nowhere and does not check the mount point, so it also
+works while the mount is up.
 
 See `config.example.json`, and [Config.md](Config.md) for every entry in detail:
 what it does, when to set it, example values and their effects. Selected
@@ -297,7 +315,10 @@ connection to ssh-agent shares the handshake's deadline, so a wedged agent
 fails the handshake rather than hanging it. A request that finds a dial already
 in progress waits for it no longer than `-op-timeout`. The mount point is
 checked with `-mount-timeout`, so a dead NFS mount left on it by a crashed run
-produces an error that suggests `umount -f` rather than a hang at startup.
+produces an error that suggests `umount -f` rather than a hang at startup. A
+mount point that already has something mounted on it (another sshnfs, or the
+leftover of one that was killed) is refused rather than mounted over, on macOS
+and Linux.
 
 Logging never blocks. Lines go through a bounded queue to stderr, and if stderr
 stops accepting them (a terminal paused with Ctrl-S, a pipe nobody reads), they
@@ -312,8 +333,11 @@ same way; under `nohup` SIGHUP stays ignored. A closed stderr pipe no longer
 kills the process. Ctrl-C at a passphrase prompt exits at once and restores the
 terminal. A ProxyCommand started on a reconnect, or with no terminal, runs in
 its own process group, so Ctrl-C does not cut the connection before the
-unmount, and closing it kills everything the command started. A failed dial is remembered for a second, so an unreachable host
-does not make every queued request pay its own full timeout.
+unmount, and closing it kills everything the command started.
+
+A failed dial is remembered for a second, so an unreachable host does not make
+every queued request pay its own full timeout. The background reconnect backs
+off up to `-reconnect-max-delay`; `0` there means a ceiling of one hour.
 
 ## Security
 
@@ -343,7 +367,6 @@ uid the client sends.
   taken effect, a remove, rename or symlink is recognised as done rather than
   reported as "no such file" or "exists". An exclusive create can still
   report "exists" for a file it just created.
-
 - **One stuck NFS connection, one goroutine.** go-nfs answers one request at a
   time per client connection. If a client connection dies while a reply is
   being written, go-nfs leaks that connection's goroutine. That is a go-nfs
@@ -351,7 +374,6 @@ uid the client sends.
 - **Prompts wait for you.** A passphrase or password prompt during the first
   connection has no timeout, since it waits for a person. It is never shown
   again after that.
-
 - **No server-side locking.** NLM is not implemented; use `locallocks`.
 - **No hard links**, no mknod, no fifos — SFTP has no portable equivalent.
 - **Modes on creation** are applied with a follow-up `chmod`, because SFTP's
@@ -368,9 +390,6 @@ uid the client sends.
   does this atomically. If the server lacks that extension the code falls back
   to a plain rename, and only removes an existing destination when the rename
   is refused — never on some other error.
-- **Truncation via SETATTR** goes through go-nfs's `O_WRONLY|O_EXCL` open. That
-  works on OpenSSH, where `O_EXCL` without `O_CREAT` is ignored; a stricter
-  SFTP server may reject it.
 - **Symlink targets are returned verbatim**, like a kernel NFS server. An
   absolute target that points inside the export still resolves against the
   client's root, not the mount point — there is no rewriting that would fix
@@ -398,7 +417,20 @@ mounts serving different roots with independent read-only settings.
 that a stalled proxy command still times out, and that reconnection rebuilds
 the chain.
 
+These need no external sshd and always run: `hang_test.go` uses an in-process
+SSH server that can stall on demand, and checks that stalled requests, silent
+keepalives, hung agents, slow dials, stuck `mount` children and a blocked
+stderr never hang the program, and that reconnects never prompt.
+`review_test.go` covers retry reconciliation, handle release after failures,
+statvfs caching, host key algorithm selection, the privileged-port check, the
+`user@host:path` parser, `-version`/`-print-config`, and the multi-host example
+files. `proc_unix_test.go` (macOS/Linux only) checks ProxyCommand process
+groups, stderr draining and the already-mounted check.
+
 ```sh
-# against any sshd you can key into on 127.0.0.1:2222
+# everything that needs no external sshd
+go test ./...
+
+# plus the integration tests, against any sshd you can key into on 127.0.0.1:2222
 SSHNFS_TEST_USER=$USER SSHNFS_TEST_KEY=~/.ssh/id_ed25519 go test -race ./...
 ```

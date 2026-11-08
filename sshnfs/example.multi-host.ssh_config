@@ -1,0 +1,43 @@
+# ~/.ssh/config entries used by example.multi-host.json.
+#
+# sshnfs reads these the way ssh does: each "host" in the JSON is looked up
+# here as an alias. HostName, Port, User, IdentityFile, UserKnownHostsFile,
+# StrictHostKeyChecking, ConnectTimeout, ServerAliveInterval, ProxyJump and
+# ProxyCommand are honoured; anything else (ControlMaster, ForwardAgent, ...)
+# is ignored, and Match blocks are skipped.
+
+# A build server on a non-standard port, with its own key.
+Host build
+    HostName build.internal.example.com
+    Port 2222
+    User builder
+    IdentityFile ~/.ssh/id_build
+
+# A bastion, used only as a jump host for "db" below.
+Host bastion
+    HostName bastion.example.com
+    User ops
+    IdentityFile ~/.ssh/id_ops
+
+# A database server reachable only through the bastion. sshnfs dials the
+# bastion first (with the bastion's own user and key, from its block above),
+# then this host through it.
+Host db
+    HostName 10.20.0.15
+    User postgres
+    IdentityFile ~/.ssh/id_db
+    ProxyJump bastion
+
+# A NAS on a flaky home link: keepalives every 15s, a longer connect timeout.
+Host nas
+    HostName nas.home.arpa
+    Port 2200
+    User backup
+    IdentityFile ~/.ssh/id_nas
+    ServerAliveInterval 15
+    ConnectTimeout 30
+
+# Defaults for every host above (the first value found for a keyword wins,
+# so this block must come last).
+Host *
+    UserKnownHostsFile ~/.ssh/known_hosts

@@ -335,3 +335,102 @@ func TestTruncateOpenDropsMeaninglessExcl(t *testing.T) {
 		t.Fatal("exclusive create of an existing file succeeded")
 	}
 }
+
+func TestSplitTarget(t *testing.T) {
+	cases := []struct {
+		in, user, host, path string
+		hasPath              bool
+	}{
+		{"host", "", "host", "", false},
+		{"host:", "", "host", "", true},
+		{"bob@host:/srv", "bob", "host", "/srv", true},
+		{"jdoe@corp.example@winhost:/c/x", "jdoe@corp.example", "winhost", "/c/x", true},
+		{"bob@host:/odd@name:x", "bob", "host", "/odd@name:x", true},
+		{"[::1]:/srv", "", "::1", "/srv", true},
+		{"bob@[fe80::1]", "bob", "fe80::1", "", false},
+		{"host:relative/dir", "", "host", "relative/dir", true},
+	}
+	for _, c := range cases {
+		user, host, path, hasPath, err := splitTarget(c.in)
+		if err != nil || user != c.user || host != c.host || path != c.path || hasPath != c.hasPath {
+			t.Errorf("splitTarget(%q) = %q, %q, %q, %v, %v; want %q, %q, %q, %v",
+				c.in, user, host, path, hasPath, err, c.user, c.host, c.path, c.hasPath)
+		}
+	}
+	if _, _, _, _, err := splitTarget("[::1"); err == nil {
+		t.Error("unbalanced bracket accepted")
+	}
+}
+
+func TestVersionNeedsNoConfiguration(t *testing.T) {
+	mounts, err := LoadConfig([]string{"-version", "-use-ssh-config=false"}, io.Discard)
+	if err != nil || !mounts[0].showVersion {
+		t.Fatalf("-version: %v", err)
+	}
+}
+
+func TestPrintConfigSkipsMountPointChecks(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "not-there")
+	_, err := LoadConfig([]string{"-print-config", "-use-ssh-config=false", "-host", "h", "-mount", missing}, io.Discard)
+	if err != nil {
+		t.Fatalf("-print-config with a missing mount point: %v", err)
+	}
+	if _, err := LoadConfig([]string{"-use-ssh-config=false", "-host", "h", "-mount", missing}, io.Discard); err == nil {
+		t.Fatal("a missing mount point was accepted for a real run")
+	}
+}
+
+// example.multi-host.json with example.multi-host.ssh_config resolves every
+// mount from ssh config, the jump host included. Keeps the example honest.
+func TestMultiHostExampleResolvesFromSSHConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	ssh := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(ssh, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"id_build", "id_ops", "id_db", "id_nas", "known_hosts"} {
+		if err := os.WriteFile(filepath.Join(ssh, k), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mounts, err := LoadConfig([]string{"-print-config",
+		"-F", "example.multi-host.ssh_config", "-config", "example.multi-host.json"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounts) != 3 {
+		t.Fatalf("got %d mounts, want 3", len(mounts))
+	}
+	key := func(name string) string { return filepath.Join(ssh, name) }
+	want := []struct {
+		name, host, user, key string
+		port                  int
+		connect, keepalive    time.Duration
+	}{
+		{"build", "build.internal.example.com", "builder", key("id_build"), 2222, 15 * time.Second, 30 * time.Second},
+		{"db-logs", "10.20.0.15", "postgres", key("id_db"), 22, 15 * time.Second, 30 * time.Second},
+		{"nas", "nas.home.arpa", "backup", key("id_nas"), 2200, 30 * time.Second, 15 * time.Second},
+	}
+	for i, w := range want {
+		m := mounts[i]
+		if m.Name != w.name || m.Host != w.host || m.User != w.user || m.Port != w.port ||
+			len(m.IdentityFiles) != 1 || m.IdentityFiles[0] != w.key ||
+			m.ConnectTimeout.D() != w.connect || m.KeepAlive.D() != w.keepalive {
+			t.Errorf("mount %d: got name=%s host=%s user=%s port=%d keys=%v connect=%s keepalive=%s; want %+v",
+				i, m.Name, m.Host, m.User, m.Port, m.IdentityFiles, m.ConnectTimeout, m.KeepAlive, w)
+		}
+		if m.KnownHostsFile != key("known_hosts") {
+			t.Errorf("mount %d: known_hosts_file = %s", i, m.KnownHostsFile)
+		}
+	}
+	hops := mounts[1].jumpHops
+	if len(hops) != 1 || hops[0].Host != "bastion.example.com" || hops[0].User != "ops" ||
+		len(hops[0].IdentityFiles) != 1 || hops[0].IdentityFiles[0] != key("id_ops") {
+		t.Errorf("db jump hops = %+v; want ops@bastion.example.com with id_ops", hops)
+	}
+	if len(mounts[0].jumpHops) != 0 || len(mounts[2].jumpHops) != 0 {
+		t.Error("a jump host leaked into a mount that has none")
+	}
+}

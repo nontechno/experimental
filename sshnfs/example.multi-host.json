@@ -1,0 +1,26 @@
+{
+  "mount_sudo": true,
+  "mounts": [
+    {
+      "name": "build",
+      "host": "build",
+      "remote_path": "/srv/work",
+      "mount_point": "~/mnt/build"
+    },
+    {
+      "name": "db-logs",
+      "host": "db",
+      "remote_path": "/var/log/postgresql",
+      "mount_point": "~/mnt/db-logs",
+      "read_only": true
+    },
+    {
+      "name": "nas",
+      "host": "nas",
+      "remote_path": "/volume1/media",
+      "mount_point": "~/mnt/nas",
+      "attr_cache_ttl": "30s",
+      "dir_cache_ttl": "30s"
+    }
+  ]
+}

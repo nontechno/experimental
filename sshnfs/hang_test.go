@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -437,9 +436,14 @@ func TestHungAgentDoesNotHangHandshake(t *testing.T) {
 }
 
 func TestLogSinkNeverBlocks(t *testing.T) {
-	pr, pw := io.Pipe() // nobody reads: every write to pw blocks
-	defer pr.Close()
-	w := newAsyncWriter(pw, 4)
+	out := &stuckWriter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	defer close(out.release)
+	w := newAsyncWriter(out, 4)
+	// Wait until the writer goroutine is stuck in a write. Otherwise it may
+	// pick up the queue only after the burst below, report the drops (which
+	// resets the counter) and leave nothing to check.
+	w.Write([]byte("first\n"))
+	<-out.entered
 	start := time.Now()
 	for i := 0; i < 100; i++ {
 		w.Write([]byte("line\n"))
@@ -455,4 +459,19 @@ func TestLogSinkNeverBlocks(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("Flush ignored its deadline: %s", elapsed)
 	}
+}
+
+// stuckWriter blocks every Write until released, and says when one started.
+type stuckWriter struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (w *stuckWriter) Write(p []byte) (int, error) {
+	select {
+	case w.entered <- struct{}{}:
+	default:
+	}
+	<-w.release
+	return len(p), nil
 }

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -404,6 +405,11 @@ func LoadConfig(args []string, out io.Writer) ([]*Config, error) {
 		cfg.exampleConfig = true
 		return []*Config{cfg}, nil
 	}
+	if probe.showVersion {
+		// Needs no configuration, and must not fail for the lack of one.
+		cfg.showVersion = true
+		return []*Config{cfg}, nil
+	}
 	if probe.configFile != "" {
 		if err := cfg.loadFile(probe.configFile); err != nil {
 			return nil, err
@@ -444,7 +450,14 @@ func LoadConfig(args []string, out io.Writer) ([]*Config, error) {
 		if err := m.applySSHConfig(); err != nil {
 			return nil, fmt.Errorf("mount %s: %w", m.label(i), err)
 		}
-		if err := m.validate(); err != nil {
+		err := m.validate()
+		if err == nil && !m.printConfig {
+			// Printing the configuration does not touch the mount point, so
+			// it should work while the mount is up (or before the directory
+			// exists).
+			err = m.checkMountPoint()
+		}
+		if err != nil {
 			if len(mounts) > 1 {
 				return nil, fmt.Errorf("mount %s: %w", m.label(i), err)
 			}
@@ -591,18 +604,19 @@ func (c *Config) applyPositional(args []string) error {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(args[2:], " "))
 	}
 	if len(args) >= 1 && args[0] != "" {
-		target := args[0]
-		if i := strings.Index(target, "@"); i >= 0 {
-			c.User = target[:i]
+		user, host, remotePath, hasPath, err := splitTarget(args[0])
+		if err != nil {
+			return err
+		}
+		if user != "" {
+			c.User = user
 			c.markExplicit("user")
-			target = target[i+1:]
 		}
-		if i := strings.Index(target, ":"); i >= 0 {
-			c.RemotePath = target[i+1:]
-			target = target[:i]
+		if hasPath {
+			c.RemotePath = remotePath
 		}
-		if target != "" {
-			c.Host = target
+		if host != "" {
+			c.Host = host
 			c.markExplicit("host")
 		}
 	}
@@ -699,6 +713,14 @@ func (c *Config) validate() error {
 			return fmt.Errorf("mount point: %w", err)
 		}
 		c.MountPoint = abs
+	}
+	return nil
+}
+
+// checkMountPoint verifies that the mount point is a directory with nothing
+// mounted on it yet.
+func (c *Config) checkMountPoint() error {
+	if c.MountPoint != "" {
 		// A leftover dead NFS mount here would block a plain stat forever.
 		fi, err := statWithin(c.MountPoint, c.MountTimeout.D())
 		if err != nil {
@@ -721,7 +743,42 @@ func (c *Config) validate() error {
 }
 
 func (c *Config) Addr() string {
-	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+	return net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
+}
+
+// splitTarget splits "[user@]host[:path]" the way scp does. The path starts
+// at the first ":" outside brackets, so a bracketed IPv6 address keeps its
+// colons; the user ends at the last "@" before that, so a user name that
+// itself contains one (jdoe@corp.example, common with Windows servers)
+// survives, and so does an "@" in the path. hasPath reports whether a ":"
+// was there at all.
+func splitTarget(target string) (user, host, remotePath string, hasPath bool, err error) {
+	host = target
+	inBrackets := false
+scan:
+	for i, r := range target {
+		switch r {
+		case '[':
+			inBrackets = true
+		case ']':
+			inBrackets = false
+		case ':':
+			if !inBrackets {
+				host, remotePath, hasPath = target[:i], target[i+1:], true
+				break scan
+			}
+		}
+	}
+	if i := strings.LastIndex(host, "@"); i >= 0 {
+		user, host = host[:i], host[i+1:]
+	}
+	if strings.HasPrefix(host, "[") {
+		if !strings.HasSuffix(host, "]") {
+			return "", "", "", false, fmt.Errorf("%q: unbalanced [", target)
+		}
+		host = host[1 : len(host)-1]
+	}
+	return user, host, remotePath, hasPath, nil
 }
 
 func (c *Config) JSON() string {

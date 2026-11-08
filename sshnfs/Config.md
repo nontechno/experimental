@@ -55,7 +55,9 @@ sshnfs -config ~/.config/sshnfs.json -print-config
 ```
 
 `-print-config` replaces secrets with `***`. Its output is a template, not a
-working config: a file that still contains `***` is rejected.
+working config: a file that still contains `***` is rejected. It does not check
+the mount point, so it works before the directory exists and while the mount
+is up. `-version` and `-example-config` need no configuration at all.
 
 Unknown keys are errors, so a typo such as `"mount_piont"` is reported rather
 than silently ignored.
@@ -161,6 +163,9 @@ connects, and the alias name is kept for log messages.
 "host": "2001:db8::7"          // IPv6, no brackets here
 ```
 
+On the command line an IPv6 address needs brackets, as with scp:
+`me@[2001:db8::7]:/srv`.
+
 - **Effect:** the connection target. It is also the key used to look up the
   host's key in `known_hosts`, and its other settings in `~/.ssh/config`.
 
@@ -178,7 +183,9 @@ The SSH port on the server.
 #### `user`
 **Flag:** `-user`, or the `user@` in `user@host:/path` · **Type:** string · **Default:** your local user name
 
-The remote login name.
+The remote login name. In `user@host:/path` the user ends at the last `@`
+before the host, so a name that contains one works:
+`jdoe@corp.example@winhost:/data`.
 
 - **When to set it:** when it differs from your local name and `~/.ssh/config`
   does not provide a `User`.
@@ -334,8 +341,16 @@ corresponding entries that you did not set explicitly:
 | `ServerAliveInterval` | `keepalive_interval` |
 
 `%h`, `%p`, `%r`, `%n`, `%d`, `%l`, `%L` and `%%` are expanded. `Host` patterns
-(`build*`, `!except`) and `Include` work. The user file is read first, then
-`/etc/ssh/ssh_config`; the first file to set a keyword wins.
+(`build*`, `!except`) and `Include` work; `Match` blocks are skipped, so their
+settings never apply. The user file is read first, then `/etc/ssh/ssh_config`;
+the first value found for a keyword wins, so put a `Host *` block of defaults
+last. Anything else in the file (`ControlMaster`, `ForwardAgent`, …) is
+ignored.
+
+A key you write in the JSON, even with its default value, keeps ssh config from
+supplying it. In a file with a `mounts` array, a key written at the top level
+is inherited by every mount and so blocks ssh config for all of them. See
+[Several hosts, all from `~/.ssh/config`](#several-hosts-all-from-sshconfig).
 
 - **When to turn it off:** to make a config file fully self-contained, or to
   rule out ssh config as the cause of surprising behaviour.
@@ -384,7 +399,9 @@ separated, outermost first, each `[user@]host[:port]`:
 **Flag:** `-proxy-command` · **Type:** string · **Default:** empty
 
 A shell command whose stdin and stdout carry the SSH connection, like ssh's
-`ProxyCommand`. It runs through `/bin/sh` with `%h`, `%p` and `%r` expanded.
+`ProxyCommand`. It runs through `/bin/sh` with `%h`, `%p` and `%r` expanded,
+once, when the configuration is loaded (`-print-config` shows the result; `%%`
+gives a literal `%`).
 
 ```jsonc
 // one of:
@@ -396,6 +413,11 @@ A shell command whose stdin and stdout carry the SSH connection, like ssh's
 - **Effect:** the command's stderr is copied into the log as warnings, which is
   often the only clue when it fails. The handshake over it is still bounded by
   `connect_timeout`.
+- **Process group:** on a reconnect, or when there is no terminal, the command
+  runs in a process group of its own. Ctrl-C then does not reach it (so the
+  connection survives until the unmount is done), and closing the connection
+  kills everything the command started. The very first connection on a
+  terminal keeps it in the foreground, so that it can prompt.
 - **Security:** this executes an arbitrary shell command. Treat config files
   as code.
 
@@ -754,9 +776,10 @@ point responds.
 #### `unmount_timeout`
 **Flag:** `-unmount-timeout` · **Type:** duration · **Default:** `"30s"`
 
-The limit for each unmount attempt. Up to three are made: a plain `umount`,
-then forced variants. The commands are killed when their time is up, even if a
-child process started by `sudo` lingers.
+The limit for each unmount attempt. On macOS up to three are made (`umount`,
+`umount -f`, `diskutil unmount force`), on Linux two (`umount`, `umount -l`).
+The commands are killed when their time is up, even if a child process started
+by `sudo` lingers.
 
 - **`0` or negative:** means the default.
 
@@ -791,7 +814,9 @@ listener, caches, reconnection loop and log prefix.
 **Inheritance:** each entry starts as a copy of the top-level object, so
 shared settings are written once. Any key may appear in an entry and overrides
 the inherited value for that mount only. Command-line flags apply to every
-mount, but a key inside an entry beats them.
+mount, but a key inside an entry beats them. A key written at the top level
+counts as set explicitly in every mount, so `~/.ssh/config` cannot supply it
+for any of them.
 
 **Rules:**
 
@@ -938,6 +963,102 @@ prompt: a prompt without a terminal fails.
 }
 ```
 
+### Several hosts, all from `~/.ssh/config`
+
+When the hosts are already described in `~/.ssh/config`, the JSON only needs
+aliases. The repository has this pair as
+[`example.multi-host.json`](example.multi-host.json) and
+[`example.multi-host.ssh_config`](example.multi-host.ssh_config).
+
+`~/.ssh/config`:
+
+```
+Host build
+    HostName build.internal.example.com
+    Port 2222
+    User builder
+    IdentityFile ~/.ssh/id_build
+
+Host bastion
+    HostName bastion.example.com
+    User ops
+    IdentityFile ~/.ssh/id_ops
+
+Host db
+    HostName 10.20.0.15
+    User postgres
+    IdentityFile ~/.ssh/id_db
+    ProxyJump bastion
+
+Host nas
+    HostName nas.home.arpa
+    Port 2200
+    User backup
+    IdentityFile ~/.ssh/id_nas
+    ServerAliveInterval 15
+    ConnectTimeout 30
+
+Host *
+    UserKnownHostsFile ~/.ssh/known_hosts
+```
+
+The sshnfs config:
+
+```json
+{
+  "mount_sudo": true,
+  "mounts": [
+    {
+      "name": "build",
+      "host": "build",
+      "remote_path": "/srv/work",
+      "mount_point": "~/mnt/build"
+    },
+    {
+      "name": "db-logs",
+      "host": "db",
+      "remote_path": "/var/log/postgresql",
+      "mount_point": "~/mnt/db-logs",
+      "read_only": true
+    },
+    {
+      "name": "nas",
+      "host": "nas",
+      "remote_path": "/volume1/media",
+      "mount_point": "~/mnt/nas",
+      "attr_cache_ttl": "30s",
+      "dir_cache_ttl": "30s"
+    }
+  ]
+}
+```
+
+What each mount ends up with:
+
+| Mount | Connects to | As | Key | Notes |
+|---|---|---|---|---|
+| `build` | `build.internal.example.com:2222` | `builder` | `~/.ssh/id_build` | |
+| `db-logs` | `10.20.0.15:22`, through `bastion.example.com` | `postgres` | `~/.ssh/id_db` | the bastion is logged into as `ops` with `~/.ssh/id_ops` |
+| `nas` | `nas.home.arpa:2200` | `backup` | `~/.ssh/id_nas` | keepalive every 15s, connect timeout 30s |
+
+Things to keep in mind:
+
+- **Leave out what ssh config should decide.** `user`, `port`,
+  `identity_files`, `known_hosts_file`, `connect_timeout`,
+  `keepalive_interval`, `proxy_jump`, `proxy_command` and
+  `insecure_ignore_host_key` are taken from ssh config only when absent from
+  the JSON. Writing `"user": "me"` at the top level would make every mount log
+  in as `me`.
+- **Keys that do not exist are skipped.** An `IdentityFile` that is not on disk
+  is dropped silently, as ssh does; sshnfs then falls back to the agent and the
+  default keys.
+- **The alias is kept for logs**, so log lines and the mount's label say
+  `build`, not the long host name.
+- **Check the result** before mounting:
+  `sshnfs -config example.multi-host.json -print-config`. Add
+  `-F example.multi-host.ssh_config` to try it against the example ssh config
+  instead of your own.
+
 ---
 
 ## Troubleshooting by symptom
@@ -950,6 +1071,8 @@ prompt: a prompt without a terminal fails.
 | "host … is not in known_hosts" | First connection to this host | Run the `ssh-keyscan` command from the message; `known_hosts_file` |
 | "too many authentication failures" | The agent offers too many keys | `use_agent: false` and a specific `identity_files` |
 | Startup hangs then fails at the mount point | A dead NFS mount from an earlier crash | `sudo umount -f <mount point>`; `mount_timeout` |
+| "something is already mounted on …" | Another sshnfs is running there, or one was killed without unmounting | Stop it, or `sudo umount <mount point>` |
+| A setting from `~/.ssh/config` is not used | The same key is written in the JSON (possibly at the top level of a `mounts` file), or it sits in a `Match` block | Remove the key from the JSON; move the setting into a `Host` block |
 | Mount refused, log says "not from a privileged port" | Mounted by hand with `noresvport`, or a user-space client | Use the printed mount command, or `require_privileged_port: false` |
 | Changes made on the server show up late | Caching | Lower `attr_cache_ttl`, `dir_cache_ttl` and `actimeo` |
 | Slow `ls -l` or builds over a slow link | Caches too short | Raise `attr_cache_ttl` and `dir_cache_ttl` |
