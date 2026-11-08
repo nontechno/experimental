@@ -60,6 +60,9 @@ const waitDelay = 5 * time.Second
 // runBounded runs argv with a timeout that holds even when the command's
 // children outlive it.
 func runBounded(ctx context.Context, timeout time.Duration, argv []string) ([]byte, error) {
+	if timeout <= 0 {
+		timeout = time.Minute
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -73,7 +76,7 @@ func runBounded(ctx context.Context, timeout time.Duration, argv []string) ([]by
 
 func Mount(ctx context.Context, cfg *Config, host string, port int) error {
 	argv := MountCommand(cfg, host, port, cfg.MountPoint)
-	out, err := runBounded(ctx, 60*time.Second, argv)
+	out, err := runBounded(ctx, cfg.MountTimeout.D(), argv)
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		hint := ""
@@ -107,7 +110,7 @@ func Unmount(cfg *Config) error {
 		if cfg.MountSudo {
 			argv = append([]string{"sudo"}, argv...)
 		}
-		out, err := runBounded(context.Background(), 30*time.Second, argv)
+		out, err := runBounded(context.Background(), cfg.UnmountTimeout.D(), argv)
 		if err == nil {
 			return nil
 		}

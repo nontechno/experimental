@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -332,11 +333,13 @@ func TestUIDSquashing(t *testing.T) {
 }
 
 func TestPathEscapeIsContained(t *testing.T) {
-	export := t.TempDir()
+	// The export root is a path on the SSH server, so always POSIX-style,
+	// whatever the local OS.
+	export := "/srv/export"
 	fsys := &FS{root: normalizeRoot(export)}
 	for _, in := range []string{"../../etc/passwd", "/../etc/passwd", "a/../../../etc/passwd"} {
 		got := fsys.resolve(in)
-		if got != filepath.Join(export, "etc", "passwd") && got != export {
+		if got != path.Join(export, "etc", "passwd") && got != export {
 			t.Fatalf("resolve(%q) = %q, escaped the export root", in, got)
 		}
 	}

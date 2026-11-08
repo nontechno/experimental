@@ -117,8 +117,9 @@ func shortLocalHostname() string {
 // applySSHConfig fills in whatever the user did not state explicitly from
 // ~/.ssh/config, treating Host as an alias to look up. Honoured keywords:
 // HostName, Port, User, IdentityFile, UserKnownHostsFile,
-// StrictHostKeyChecking, ConnectTimeout and ServerAliveInterval. Anything else
-// in the file (ProxyJump, ProxyCommand, ControlMaster, …) is ignored.
+// StrictHostKeyChecking, ConnectTimeout, ServerAliveInterval, ProxyJump and
+// ProxyCommand. Anything else in the file (ControlMaster, ForwardAgent, …) is
+// ignored.
 func (c *Config) applySSHConfig() error {
 	var (
 		set *sshConfigSet

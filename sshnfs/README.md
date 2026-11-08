@@ -208,7 +208,11 @@ See `config.example.json`. Selected options:
 | `-listen` | `listen` | NFS listen address (default `127.0.0.1:0`) |
 | `-read-only` | `read_only` | refuse every mutating operation |
 | `-uid`, `-gid` | `uid`, `gid` | squash ownership; `-1` passes the remote ids through |
-| `-op-timeout` | `op_timeout` | give up on an SFTP request after this long and reconnect (default `30s`, `0` waits forever) |
+| `-connect-timeout` | `connect_timeout` | TCP connect, each SSH handshake, SFTP start, ssh-agent exchanges (default `15s`) |
+| `-op-timeout` | `op_timeout` | give up on an SFTP request when the server has sent nothing for this long (default `30s`, `0` waits forever) |
+| `-op-max-time` | `op_max_time` | give up on an SFTP request after this long, however busy (default `10m`, `0` = no limit) |
+| `-keepalive`, `-keepalive-timeout` | `keepalive_interval`, `keepalive_timeout` | keepalive period and how long to wait for its reply (`30s`, `15s`) |
+| `-mount-timeout`, `-unmount-timeout` | `mount_timeout`, `unmount_timeout` | `mount` plus the mount-point check, and each `umount` attempt (`60s`, `30s`) |
 | `-attr-cache`, `-dir-cache` | `attr_cache_ttl`, `dir_cache_ttl` | metadata caching (`0` disables) |
 | `-open-file-idle`, `-open-file-limit` | `open_file_idle`, `open_file_limit` | SFTP handle pool |
 | `-mount`, `-mount-options`, `-mount-sudo` | `mount_point`, … | local mount |
@@ -258,7 +262,13 @@ the server. A value of `0`, including `ConnectTimeout 0` in `~/.ssh/config`,
 means the default (15s), not "no timeout".
 
 `-op-timeout` bounds every SFTP request once connected, including the closing
-of file handles. This catches a failure that keepalives cannot see. If the
+of file handles. It measures silence, not duration: it fires when the server
+has sent nothing at all for that long, so a listing of a huge directory over a
+slow link, which is many round trips, is not cut off as long as the answers
+keep coming. `-op-max-time` caps a single request regardless. It matters only
+for servers that answer several requests at once, where other traffic keeps
+the session from ever going silent. This catches a failure that keepalives
+cannot see. If the
 remote path is on a hung or locked filesystem, `sftp-server` blocks in that
 `stat` or `open`, but sshd keeps answering keepalives, so the link looks
 healthy. And because `sftp-server` and go-nfs both handle one request at a
@@ -275,6 +285,19 @@ connection. Whatever was entered is remembered, per key file and per host, so
 a reconnect, which happens in the background, never waits on the terminal.
 Use `SSHNFS_PASSPHRASE`, `SSHNFS_PASSWORD` or ssh-agent for keys that were not
 needed the first time.
+
+Keepalives wait at most `-keepalive-timeout` for their answer. Without that, a
+link that silently stops delivering packets would go unnoticed until the kernel
+gives up on the TCP connection, which can take a quarter of an hour. The
+connection to ssh-agent shares the handshake's deadline, so a wedged agent
+fails the handshake rather than hanging it. A request that finds a dial already
+in progress waits for it no longer than `-op-timeout`. The mount point is
+checked with `-mount-timeout`, so a dead NFS mount left on it by a crashed run
+produces an error that suggests `umount -f` rather than a hang at startup.
+
+Logging never blocks. Lines go through a bounded queue to stderr, and if stderr
+stops accepting them (a terminal paused with Ctrl-S, a pipe nobody reads), they
+are dropped and counted rather than stalling whatever was logging.
 
 Shutdown closes the SSH connection before the file handles, so `Ctrl-C` does
 not wait on a server that has stopped answering, and `mount`/`umount` are
@@ -295,6 +318,14 @@ This is cosmetic — the server enforces permissions as your SSH user, not as th
 uid the client sends.
 
 ## Known limitations
+
+- **One stuck NFS connection, one goroutine.** go-nfs answers one request at a
+  time per client connection. If a client connection dies while a reply is
+  being written, go-nfs leaks that connection's goroutine. That is a go-nfs
+  issue; the kernel simply opens a new connection.
+- **Prompts wait for you.** A passphrase or password prompt during the first
+  connection has no timeout, since it waits for a person. It is never shown
+  again after that.
 
 - **No server-side locking.** NLM is not implemented; use `locallocks`.
 - **No hard links**, no mknod, no fifos — SFTP has no portable equivalent.

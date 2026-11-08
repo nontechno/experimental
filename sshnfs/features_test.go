@@ -415,6 +415,8 @@ func TestMultipleMountsRejectConflicts(t *testing.T) {
 		return path
 	}
 	base := `"host":"h","user":"u","use_ssh_config":false,`
+	// JSON-encoded, so a Windows path with backslashes stays valid JSON.
+	qdir, _ := json.Marshal(dir)
 
 	cases := []struct {
 		name string
@@ -423,7 +425,7 @@ func TestMultipleMountsRejectConflicts(t *testing.T) {
 	}{
 		{
 			"duplicate mount point",
-			`{` + base + `"mounts":[{"mount_point":"` + dir + `"},{"mount_point":"` + dir + `"}]}`,
+			`{` + base + `"mounts":[{"mount_point":` + string(qdir) + `},{"mount_point":` + string(qdir) + `}]}`,
 			"claimed by both",
 		},
 		{

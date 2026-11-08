@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	stdlog "log"
 	"net"
 	"os"
 	"os/signal"
@@ -60,6 +61,12 @@ func run(args []string) int {
 	level, _ := parseLogLevel(first.LogLevel)
 	log := NewLogger(level)
 	nfs.Log.SetLevel(level.nfsLevel())
+	// go-nfs logs through the standard log package; send that through the
+	// same non-blocking sink so a stalled stderr cannot block NFS requests.
+	stdlog.SetOutput(stderr)
+	// Give queued log lines a moment to reach stderr before exiting, but no
+	// more: a stalled stderr must not hold up exit either.
+	defer stderr.Flush(2 * time.Second)
 
 	// Bring every mount up before mounting any of them, so a failure on the
 	// third host does not leave the first two mounted.
@@ -118,6 +125,7 @@ func run(args []string) int {
 	go func() {
 		s := <-sig
 		log.Errorf("got %s again, exiting without finishing cleanup", s)
+		stderr.Flush(time.Second)
 		os.Exit(130)
 	}()
 

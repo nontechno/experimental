@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +34,10 @@ type stallingSSHD struct {
 
 	mu    sync.Mutex
 	conns []net.Conn
+
+	// muteGlobal stops answering global requests such as keepalives, the
+	// way a link that silently drops packets looks from the client.
+	muteGlobal atomic.Bool
 }
 
 type stallLister struct {
@@ -62,6 +68,10 @@ func startStallingSSHD(t *testing.T) *stallingSSHD {
 	}
 	cfg := &ssh.ServerConfig{
 		PasswordCallback: func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) { return nil, nil },
+		// Offered but always refused, so clients do consult their keys and agent.
+		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+			return nil, errors.New("no")
+		},
 	}
 	cfg.AddHostKey(signer)
 
@@ -91,7 +101,16 @@ func (d *stallingSSHD) serve(nc net.Conn, cfg *ssh.ServerConfig) {
 	if err != nil {
 		return
 	}
-	go ssh.DiscardRequests(reqs) // answers keepalives, as sshd does
+	go func() { // answers keepalives, as sshd does, unless muted
+		for req := range reqs {
+			if d.muteGlobal.Load() {
+				continue
+			}
+			if req.WantReply {
+				req.Reply(false, nil)
+			}
+		}
+	}()
 	for nch := range chans {
 		if nch.ChannelType() != "session" {
 			nch.Reject(ssh.UnknownChannelType, "no")
@@ -261,13 +280,13 @@ func TestReconnectNeverPromptsForPassword(t *testing.T) {
 
 	// IdentityFiles is empty, so default keys may be found; what matters is
 	// that the password is neither prompted for nor reported as usable.
-	_, err := conn.authMethods(e)
+	_, _, err := conn.authMethods(e)
 	if err != nil && !strings.Contains(err.Error(), "first connection") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	conn.passwords["u@h:22"] = "remembered"
-	if _, err := conn.authMethods(e); err != nil {
+	if _, _, err := conn.authMethods(e); err != nil {
 		t.Fatalf("with a remembered password: %v", err)
 	}
 }
@@ -300,5 +319,139 @@ func TestMountCommandTimeoutHoldsWhenChildKeepsPipe(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > waitDelay+5*time.Second {
 		t.Fatalf("runBounded returned after %s", elapsed)
+	}
+}
+
+func TestOverdueTracksSilenceNotDuration(t *testing.T) {
+	start := time.Now()
+	act := newActivity()
+	quiet, hard := time.Second, time.Minute
+
+	// Server answered recently: a long operation is fine.
+	act.last.Store(start.Add(50 * time.Second).UnixNano())
+	if why, wait := overdue(start.Add(50*time.Second+500*time.Millisecond), start, act, quiet, hard); why != "" || wait != 500*time.Millisecond {
+		t.Fatalf("busy session: why=%q wait=%s", why, wait)
+	}
+	// Server silent for the whole quiet period.
+	if why, _ := overdue(start.Add(52*time.Second), start, act, quiet, hard); !strings.Contains(why, "no reply") {
+		t.Fatalf("silent session: why=%q", why)
+	}
+	// Busy, but past the hard cap.
+	act.last.Store(start.Add(time.Minute).UnixNano())
+	if why, _ := overdue(start.Add(time.Minute), start, act, quiet, hard); !strings.Contains(why, "still running") {
+		t.Fatalf("hard cap: why=%q", why)
+	}
+	// Activity from before the operation started does not count.
+	act.last.Store(start.Add(-time.Hour).UnixNano())
+	if why, wait := overdue(start.Add(200*time.Millisecond), start, act, quiet, hard); why != "" || wait != 800*time.Millisecond {
+		t.Fatalf("fresh op: why=%q wait=%s", why, wait)
+	}
+}
+
+func TestUnansweredKeepaliveDropsSession(t *testing.T) {
+	d := startStallingSSHD(t)
+	cfg := stallConfig(t, d.addr)
+	cfg.KeepAlive = Duration(100 * time.Millisecond)
+	cfg.KeepAliveTimeout = Duration(300 * time.Millisecond)
+	cfg.Reconnect = false
+	conn := NewConn(cfg, NewLogger(LevelPanic))
+	defer conn.Close()
+
+	if _, _, err := conn.Client(); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	d.muteGlobal.Store(true)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, _, ok := conn.current(); !ok {
+			return // dropped, as it should be
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("session still considered alive although keepalives go unanswered")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestWaitingForDialIsBounded(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Host, cfg.User = "127.0.0.1", "u"
+	cfg.OpTimeout = Duration(200 * time.Millisecond)
+	conn := NewConn(cfg, NewLogger(LevelPanic))
+	defer conn.Close()
+
+	conn.dialing <- struct{}{} // a dial that never finishes
+	start := time.Now()
+	_, _, err := conn.Client()
+	if err == nil || !strings.Contains(err.Error(), "still connecting") {
+		t.Fatalf("got %v, want a still-connecting error", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("waited %s for the dial lock", elapsed)
+	}
+}
+
+func TestHungAgentDoesNotHangHandshake(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Read requests, never answer.
+			go func() {
+				buf := make([]byte, 4096)
+				for {
+					if _, err := c.Read(buf); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	t.Setenv("SSH_AUTH_SOCK", sock)
+
+	d := startStallingSSHD(t)
+	cfg := stallConfig(t, d.addr)
+	cfg.UseAgent = true
+	cfg.ConnectTimeout = Duration(500 * time.Millisecond)
+	conn := NewConn(cfg, NewLogger(LevelPanic))
+	defer conn.Close()
+
+	done := make(chan error, 1)
+	go func() { _, _, err := conn.Client(); done <- err }()
+	select {
+	case <-done:
+		// Success (password after the agent gave up) or an error: either
+		// way it came back.
+	case <-time.After(5 * time.Second):
+		t.Fatal("handshake blocked on an unresponsive ssh-agent")
+	}
+}
+
+func TestLogSinkNeverBlocks(t *testing.T) {
+	pr, pw := io.Pipe() // nobody reads: every write to pw blocks
+	defer pr.Close()
+	w := newAsyncWriter(pw, 4)
+	start := time.Now()
+	for i := 0; i < 100; i++ {
+		w.Write([]byte("line\n"))
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("writes blocked for %s", elapsed)
+	}
+	if w.dropped.Load() == 0 {
+		t.Error("expected dropped lines to be counted")
+	}
+	start = time.Now()
+	w.Flush(200 * time.Millisecond)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Flush ignored its deadline: %s", elapsed)
 	}
 }

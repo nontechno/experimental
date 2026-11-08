@@ -126,11 +126,13 @@ type Config struct {
 	ProxyCommand string `json:"proxy_command"`
 
 	// ----- ssh / sftp tuning -----
-	ConnectTimeout Duration `json:"connect_timeout"`
-	OpTimeout      Duration `json:"op_timeout"` // per sftp request; 0 = wait forever
-	KeepAlive      Duration `json:"keepalive_interval"`
-	MaxPacket      int      `json:"max_packet"`
-	MaxConcurrent  int      `json:"max_concurrent_requests"`
+	ConnectTimeout   Duration `json:"connect_timeout"`
+	OpTimeout        Duration `json:"op_timeout"`  // sftp request with a silent server; 0 = wait forever
+	OpMaxTime        Duration `json:"op_max_time"` // sftp request still running; 0 = no limit
+	KeepAlive        Duration `json:"keepalive_interval"`
+	KeepAliveTimeout Duration `json:"keepalive_timeout"`
+	MaxPacket        int      `json:"max_packet"`
+	MaxConcurrent    int      `json:"max_concurrent_requests"`
 
 	// ----- reconnection -----
 	Reconnect            bool     `json:"reconnect"`
@@ -150,10 +152,12 @@ type Config struct {
 	GID          int      `json:"gid"` // -1 => report the remote gid as-is
 
 	// ----- local mount -----
-	MountPoint    string `json:"mount_point"`
-	MountOptions  string `json:"mount_options"`
-	MountSudo     bool   `json:"mount_sudo"`
-	UnmountOnExit bool   `json:"unmount_on_exit"`
+	MountPoint     string   `json:"mount_point"`
+	MountOptions   string   `json:"mount_options"`
+	MountSudo      bool     `json:"mount_sudo"`
+	UnmountOnExit  bool     `json:"unmount_on_exit"`
+	MountTimeout   Duration `json:"mount_timeout"`   // mount, and checking the mount point
+	UnmountTimeout Duration `json:"unmount_timeout"` // each umount attempt
 
 	// ----- misc -----
 	LogLevel string `json:"log_level"`
@@ -206,6 +210,10 @@ func DefaultConfig() *Config {
 		SSHConfigFile:        "~/.ssh/config",
 		ConnectTimeout:       Duration(15 * time.Second),
 		OpTimeout:            Duration(30 * time.Second),
+		OpMaxTime:            Duration(10 * time.Minute),
+		KeepAliveTimeout:     Duration(15 * time.Second),
+		MountTimeout:         Duration(60 * time.Second),
+		UnmountTimeout:       Duration(30 * time.Second),
 		KeepAlive:            Duration(30 * time.Second),
 		MaxPacket:            32768,
 		MaxConcurrent:        64,
@@ -280,7 +288,9 @@ func (c *Config) bind(fs *flag.FlagSet) {
 	fs.StringVar(&c.ProxyCommand, "proxy-command", c.ProxyCommand, "shell command whose stdin/stdout carry the connection")
 
 	fs.Var(&c.ConnectTimeout, "connect-timeout", "ssh connect, handshake and subsystem timeout")
-	fs.Var(&c.OpTimeout, "op-timeout", "give up on an sftp request after this long and reconnect (0 waits forever)")
+	fs.Var(&c.OpTimeout, "op-timeout", "give up on an sftp request, and reconnect, when the server has sent nothing for this long (0 waits forever)")
+	fs.Var(&c.OpMaxTime, "op-max-time", "give up on an sftp request, and reconnect, after this long however busy the server is (0 = no limit)")
+	fs.Var(&c.KeepAliveTimeout, "keepalive-timeout", "treat the connection as lost when a keepalive gets no reply within this long")
 	fs.Var(&c.KeepAlive, "keepalive", "ssh keepalive interval (0 disables)")
 	fs.IntVar(&c.MaxPacket, "max-packet", c.MaxPacket, "maximum sftp packet size in bytes")
 	fs.IntVar(&c.MaxConcurrent, "max-concurrent", c.MaxConcurrent, "maximum concurrent sftp requests")
@@ -304,6 +314,8 @@ func (c *Config) bind(fs *flag.FlagSet) {
 	fs.StringVar(&c.MountOptions, "mount-options", c.MountOptions, "options passed to mount -o")
 	fs.BoolVar(&c.MountSudo, "mount-sudo", c.MountSudo, "run mount/umount through sudo")
 	fs.BoolVar(&c.UnmountOnExit, "unmount-on-exit", c.UnmountOnExit, "unmount the mount point when the server stops")
+	fs.Var(&c.MountTimeout, "mount-timeout", "time limit for mount and for checking that the mount point responds")
+	fs.Var(&c.UnmountTimeout, "unmount-timeout", "time limit for each umount attempt")
 
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "panic, fatal, error, warn, info, debug or trace")
 }
@@ -647,8 +659,20 @@ func (c *Config) validate() error {
 			h.ConnectTimeout = c.ConnectTimeout.D()
 		}
 	}
-	if c.OpTimeout < 0 {
-		return fmt.Errorf("op_timeout must not be negative")
+	if c.OpTimeout < 0 || c.OpMaxTime < 0 {
+		return fmt.Errorf("op_timeout and op_max_time must not be negative")
+	}
+	// These have no sensible "forever": a zero would only bring back the
+	// hangs they exist to prevent, so it means the default.
+	def := DefaultConfig()
+	if c.KeepAliveTimeout <= 0 {
+		c.KeepAliveTimeout = def.KeepAliveTimeout
+	}
+	if c.MountTimeout <= 0 {
+		c.MountTimeout = def.MountTimeout
+	}
+	if c.UnmountTimeout <= 0 {
+		c.UnmountTimeout = def.UnmountTimeout
 	}
 	if c.ReconnectDelay < 0 || c.ReconnectMaxDelay < 0 {
 		return fmt.Errorf("reconnect delays must not be negative")
@@ -666,7 +690,8 @@ func (c *Config) validate() error {
 			return fmt.Errorf("mount point: %w", err)
 		}
 		c.MountPoint = abs
-		fi, err := os.Stat(c.MountPoint)
+		// A leftover dead NFS mount here would block a plain stat forever.
+		fi, err := statWithin(c.MountPoint, c.MountTimeout.D())
 		if err != nil {
 			return fmt.Errorf("mount point %s: %w", c.MountPoint, err)
 		}
