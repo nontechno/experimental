@@ -100,10 +100,18 @@ func newAttrCache(attrTTL, dirTTL time.Duration) *attrCache {
 // client would never learn the entry is a link.
 func attrKey(remotePath string, lstat bool) string {
 	if lstat {
-		return "L\x00" + remotePath
+		return attrTagLstat + remotePath
 	}
-	return "S\x00" + remotePath
+	return attrTagStat + remotePath
 }
+
+const (
+	attrTagStat  = "S\x00"
+	attrTagLstat = "L\x00"
+)
+
+// attrKeyPath is the path an attrKey was made from.
+func attrKeyPath(key string) string { return key[len(attrTagStat):] }
 
 func (c *attrCache) getAttr(remotePath string, lstat bool) (os.FileInfo, bool) {
 	if c.attrTTL <= 0 {
@@ -176,6 +184,26 @@ func (c *attrCache) invalidate(remotePath string) {
 	delete(c.attrs, attrKey(remotePath, true))
 	delete(c.dirs, remotePath)
 	delete(c.dirs, path.Dir(remotePath))
+}
+
+// invalidateTree is invalidate for paths and everything under them, for a
+// rename: the children of a renamed directory are now somewhere else.
+func (c *attrCache) invalidateTree(roots ...string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k := range c.attrs {
+		if underAny(attrKeyPath(k), roots) {
+			delete(c.attrs, k)
+		}
+	}
+	for k := range c.dirs {
+		if underAny(k, roots) {
+			delete(c.dirs, k)
+		}
+	}
+	for _, r := range roots {
+		delete(c.dirs, path.Dir(r))
+	}
 }
 
 func (c *attrCache) clear() {

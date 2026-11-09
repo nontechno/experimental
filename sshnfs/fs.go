@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,6 +31,9 @@ type FS struct {
 	uid, gid int
 
 	statvfs *statvfsCache
+
+	// noPosixRename warns, once, that renames are not atomic.
+	noPosixRename *sync.Once
 }
 
 var (
@@ -49,6 +53,8 @@ func NewFS(cfg *Config, conn *Conn, log *Logger, root string) *FS {
 		uid:      cfg.UID,
 		gid:      cfg.GID,
 		statvfs:  &statvfsCache{},
+
+		noPosixRename: &sync.Once{},
 	}
 	conn.SetOnReconnect(func() {
 		f.files.dropAll()
@@ -113,9 +119,7 @@ func (f *FS) doRetry(name string, op func(c *sftp.Client) error, reconcile func(
 	if err == nil || !isConnError(err) {
 		return err
 	}
-	f.conn.Invalidate(gen)
-	f.files.dropAll()
-	f.attrs.clear()
+	f.retire(gen)
 
 	c2, gen2, err2 := f.conn.Client()
 	if err2 != nil {
@@ -134,6 +138,15 @@ func (f *FS) doRetry(name string, op func(c *sftp.Client) error, reconcile func(
 		return nil
 	}
 	return orig
+}
+
+// retire drops the session gen together with everything tied to it, the
+// pooled handles and the cached attributes, so the next request starts over
+// on a fresh session.
+func (f *FS) retire(gen uint64) {
+	f.conn.Invalidate(gen)
+	f.files.dropAll()
+	f.attrs.clear()
 }
 
 func (f *FS) Root() string { return f.root }
@@ -304,9 +317,7 @@ func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (billy.File, erro
 	if err != nil && isConnError(err) {
 		// Retire the dead session first, or the retry is handed the same
 		// one whenever the keepalive has not noticed yet.
-		f.conn.Invalidate(gen)
-		f.files.dropAll()
-		f.attrs.clear()
+		f.retire(gen)
 		entry, err = acquire()
 	}
 	if err != nil {
@@ -339,16 +350,20 @@ func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (billy.File, erro
 	}, nil
 }
 
+// randomSuffix returns n random bytes as hex, for names that must not
+// collide with anything already there.
+func randomSuffix(n int) string {
+	b := make([]byte, n)
+	rand.Read(b) // never fails since Go 1.24
+	return hex.EncodeToString(b)
+}
+
 func (f *FS) TempFile(dir, prefix string) (billy.File, error) {
 	if f.readOnly {
 		return nil, f.readOnlyErr()
 	}
 	for i := 0; i < 32; i++ {
-		var b [8]byte
-		if _, err := rand.Read(b[:]); err != nil {
-			return nil, err
-		}
-		name := path.Join(dir, prefix+hex.EncodeToString(b[:]))
+		name := path.Join(dir, prefix+randomSuffix(8))
 		file, err := f.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
 			return file, nil
@@ -365,9 +380,25 @@ func (f *FS) Rename(oldpath, newpath string) error {
 		return f.readOnlyErr()
 	}
 	from, to := f.resolve(oldpath), f.resolve(newpath)
-	f.files.drop(from)
-	f.files.drop(to)
+	// Renaming a directory moves everything under it, and a pooled handle
+	// or cached stat for "dir/f" would otherwise keep being used for that
+	// name although it now refers to the moved file. Walking the caches for
+	// a subtree costs a scan, so it is skipped when the cache knows the
+	// source is a regular file: the common save-to-temp-then-rename case.
+	tree := !f.knownRegular(from)
+	f.forget(tree, from, to)
+	defer f.forget(tree, from, to)
+
+	// parked is set while the fallback may have the destination moved aside.
+	// Atomic, because after a timeout the attempt can still be running.
+	var parked atomic.Bool
+	aside := asideName(to)
 	err := f.doRetry("rename "+from+" to "+to, func(c *sftp.Client) error {
+		if parked.Load() {
+			// The attempt that moved the destination aside lost its session.
+			// Nothing is redone on top of that; settleAside sorts it out.
+			return errRenameInterrupted
+		}
 		// PosixRename replaces the destination atomically. Only fall back if
 		// the server does not implement the OpenSSH extension: any other
 		// failure is a real error and must not cost the caller the
@@ -376,18 +407,10 @@ func (f *FS) Rename(oldpath, newpath string) error {
 		if e == nil || !isUnsupported(e) {
 			return e
 		}
-		if e := c.Rename(from, to); e == nil {
-			return nil
-		}
-		// Plain SFTP rename refuses to clobber. NFS RENAME is defined to
-		// replace, so retry once after removing the destination.
-		if _, statErr := c.Stat(to); statErr != nil {
-			return c.Rename(from, to)
-		}
-		if e := c.Remove(to); e != nil {
-			return e
-		}
-		return c.Rename(from, to)
+		f.noPosixRename.Do(func() {
+			f.log.Warnf("the server lacks posix-rename@openssh.com: a rename onto an existing name is done in steps, and is not atomic")
+		})
+		return f.renameReplacing(c, from, to, aside, &parked)
 	}, func(c *sftp.Client, err error) error {
 		// The source is gone and the destination exists: the rename the
 		// lost reply belonged to went through.
@@ -399,9 +422,223 @@ func (f *FS) Rename(oldpath, newpath string) error {
 		}
 		return nil
 	})
-	f.attrs.invalidate(from)
-	f.attrs.invalidate(to)
+	if parked.Load() {
+		// An attempt was cut off with the destination possibly moved aside.
+		var te *opTimeoutError
+		if errors.As(err, &te) {
+			// Its session was dropped, and a new one may take a while.
+			go f.settleAside(from, to, aside)
+		} else {
+			f.settleAside(from, to, aside)
+		}
+	}
+	if errors.Is(err, errRenameInterrupted) {
+		err = &os.PathError{Op: "rename", Path: from, Err: syscall.EIO}
+	}
 	return err
+}
+
+// asideName is where the fallback rename parks the destination meanwhile:
+// a short random name in the same directory, so it cannot run past NAME_MAX
+// however long the destination's name is.
+func asideName(to string) string {
+	return path.Join(path.Dir(to), ".sshnfs-"+randomSuffix(6))
+}
+
+var errRenameInterrupted = errors.New("rename interrupted by a lost connection")
+
+// knownRegular reports whether the attribute cache knows p is a regular
+// file. Anything else, a symlink to a directory included, might lead to a
+// subtree.
+func (f *FS) knownRegular(p string) bool {
+	fi, ok := f.attrs.getAttr(p, true)
+	return ok && fi.Mode().IsRegular()
+}
+
+// forget drops pooled handles and cached attributes for the paths, and with
+// tree for everything under them too, in one pass over each cache.
+func (f *FS) forget(tree bool, paths ...string) {
+	if tree {
+		f.files.dropTree(paths...)
+		f.attrs.invalidateTree(paths...)
+		return
+	}
+	for _, p := range paths {
+		f.files.drop(p)
+		f.attrs.invalidate(p)
+	}
+}
+
+// lookupEntry describes the directory entry p itself, without following it.
+// Its error matches os.ErrNotExist only when p is known to be absent. Lstat
+// is the normal way, but some servers' lstat follows a dangling symlink and
+// reports it missing. A "missing" answer is therefore checked with
+// readlink, and only if the server cannot tell (it lacks readlink) against
+// the parent's listing, which is expensive in a big directory.
+func lookupEntry(c *sftp.Client, p string) (os.FileInfo, error) {
+	fi, err := c.Lstat(p)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return fi, err
+	}
+	_, lerr := c.ReadLink(p)
+	switch {
+	case lerr == nil:
+		return symlinkInfo{name: path.Base(p)}, nil
+	case errors.Is(lerr, os.ErrNotExist):
+		return nil, err
+	case isConnError(lerr):
+		return nil, lerr
+	}
+	list, lerr := c.ReadDir(path.Dir(p))
+	if lerr != nil {
+		return nil, lerr
+	}
+	name := path.Base(p)
+	for _, e := range list {
+		if e.Name() == name {
+			return e, nil
+		}
+	}
+	return nil, err
+}
+
+// symlinkInfo stands in for the attributes of a symlink that readlink found
+// but lstat would not describe.
+type symlinkInfo struct{ name string }
+
+func (s symlinkInfo) Name() string       { return s.name }
+func (s symlinkInfo) Size() int64        { return 0 }
+func (s symlinkInfo) Mode() os.FileMode  { return os.ModeSymlink | 0o777 }
+func (s symlinkInfo) ModTime() time.Time { return time.Time{} }
+func (s symlinkInfo) IsDir() bool        { return false }
+func (s symlinkInfo) Sys() interface{}   { return nil }
+
+// renameReplacing is rename for servers without posix-rename@openssh.com.
+// Plain SFTP rename refuses to replace an existing destination, while NFS
+// RENAME must replace it. The destination is moved aside (to aside) rather
+// than removed, so that whatever makes the real rename fail (a missing source, a
+// source directory without write permission) cannot cost the caller the
+// destination: on failure it is put back.
+//
+// parked is set from just before the destination is moved aside until it
+// is known to be back or replaced. A connection error in between returns
+// with parked still set, and Rename then calls settleAside.
+//
+// The steps are not atomic: another client can briefly see the name
+// missing. Nor can SFTP tell that the two names are hard links to one file,
+// which POSIX would treat as a no-op; here the source name is renamed and
+// the destination's old link removed.
+func (f *FS) renameReplacing(c *sftp.Client, from, to, aside string, parked *atomic.Bool) error {
+	if from == to {
+		// POSIX: renaming a name to itself changes nothing.
+		_, err := c.Lstat(from)
+		return err
+	}
+	first := c.Rename(from, to)
+	if first == nil || isConnError(first) {
+		return first
+	}
+	// keep returns err if it is the connection's, else first: the reason
+	// the rename was refused.
+	keep := func(err error) error {
+		if isConnError(err) {
+			return err
+		}
+		return first
+	}
+	src, err := lookupEntry(c, from)
+	if err != nil {
+		return keep(err) // nothing to move
+	}
+	dst, err := lookupEntry(c, to)
+	if err != nil {
+		return keep(err) // nothing in the way, so the failure is something else
+	}
+	// As in POSIX: a directory replaces only an empty directory, and a
+	// non-directory only a non-directory.
+	if src.IsDir() != dst.IsDir() {
+		return first
+	}
+	if dst.IsDir() {
+		entries, err := c.ReadDir(to)
+		if err != nil {
+			return keep(err)
+		}
+		if len(entries) > 0 {
+			return first
+		}
+	}
+
+	parked.Store(true)
+	if err := c.Rename(to, aside); err != nil {
+		if isConnError(err) {
+			return err
+		}
+		parked.Store(false)
+		return first
+	}
+	if err := c.Rename(from, to); err != nil {
+		if isConnError(err) {
+			return err
+		}
+		if rerr := c.Rename(aside, to); rerr != nil {
+			if isConnError(rerr) {
+				return rerr
+			}
+			f.log.Errorf("rename %s to %s failed (%v), and putting the original %s back failed too (%v): it is now %s",
+				from, to, err, to, rerr, aside)
+		}
+		parked.Store(false)
+		return err
+	}
+	// The rename is done, so aside is certainly the replaced destination.
+	parked.Store(false)
+	if dst.IsDir() {
+		err = c.RemoveDirectory(aside)
+	} else {
+		err = c.Remove(aside)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		f.log.Warnf("renamed %s to %s, but the replaced %s could not be removed and is left as %s: %v",
+			from, to, to, aside, err)
+	}
+	return nil
+}
+
+// settleAside runs on a fresh session after a replacing rename was cut off
+// with the destination possibly moved aside. With the destination name
+// empty the rename cannot have happened, so the original is put back; plain
+// SFTP rename never replaces, so that cannot clobber a file another client
+// made meanwhile. With the name taken it is not certain whose file that is,
+// so the original is never deleted: it is left in place, and the log says
+// where.
+func (f *FS) settleAside(from, to, aside string) {
+	c, gen, err := f.conn.Client()
+	if err == nil {
+		err = f.conn.bounded(gen, "settle rename "+from+" to "+to, func() error {
+			if _, err := lookupEntry(c, aside); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return nil // never moved, or already back or removed
+				}
+				return err
+			}
+			_, err := lookupEntry(c, to)
+			switch {
+			case err == nil:
+				f.log.Warnf("a rename of %s to %s was cut off; %s exists now, and the file it replaced is left as %s: delete it if it is not needed",
+					from, to, to, aside)
+				return nil
+			case errors.Is(err, os.ErrNotExist):
+				return c.Rename(aside, to)
+			}
+			return err
+		})
+		f.forget(false, to, aside)
+	}
+	if err != nil {
+		f.log.Errorf("a rename of %s to %s was cut off, and checking on it failed (%v): the original %s may be left as %s, move it back by hand",
+			from, to, err, to, aside)
+	}
 }
 
 func (f *FS) Remove(name string) error {

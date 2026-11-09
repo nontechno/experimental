@@ -45,13 +45,22 @@ func mountOptions(base string, port int, resvport bool) string {
 	return strings.Join(opts, ",")
 }
 
+// nfsSource is the host:/ argument of mount. An IPv6 address needs brackets,
+// or "::1:/" cannot be split into host and path.
+func nfsSource(host string) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]:/"
+	}
+	return host + ":/"
+}
+
 // MountCommand returns the command line that mounts the export, so it can be
 // run or simply shown to the user.
 func MountCommand(cfg *Config, host string, port int, mountPoint string) []string {
 	argv := []string{
 		"mount", "-t", "nfs",
 		"-o", mountOptions(cfg.MountOptions, port, cfg.RequirePrivilegedPort),
-		fmt.Sprintf("%s:/", host),
+		nfsSource(host),
 		mountPoint,
 	}
 	if cfg.MountSudo {

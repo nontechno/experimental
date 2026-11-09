@@ -160,6 +160,13 @@ func NewLogger(level Level) *Logger {
 	return &Logger{out: stderr, level: level}
 }
 
+// WithLevel returns a copy of the logger at another level.
+func (l *Logger) WithLevel(level Level) *Logger {
+	c := *l
+	c.level = level
+	return &c
+}
+
 // With returns a logger that tags every line with a mount's name.
 func (l *Logger) With(prefix string) *Logger {
 	c := *l

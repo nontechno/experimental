@@ -58,7 +58,16 @@ func run(args []string) int {
 		return 0
 	}
 
+	// Each mount logs at its own level (see newServer). The NFS library has
+	// one process-wide logger, and so does sshnfs for what is not about a
+	// particular mount; both take the most verbose level asked for, so a
+	// mount set to debug gets the library's debug output too.
 	level, _ := parseLogLevel(first.LogLevel)
+	for _, m := range mounts[1:] {
+		if l, err := parseLogLevel(m.LogLevel); err == nil && l > level {
+			level = l
+		}
+	}
 	log := NewLogger(level)
 	nfs.Log.SetLevel(level.nfsLevel())
 	// go-nfs logs through the standard log package; send that through the
@@ -194,6 +203,9 @@ func newServer(cfg *Config, log *Logger, labelled bool) (*server, error) {
 	if labelled {
 		log = log.With(cfg.Label())
 	}
+	if level, err := parseLogLevel(cfg.LogLevel); err == nil {
+		log = log.WithLevel(level)
+	}
 	conn := NewConn(cfg, log)
 
 	root, err := resolveRoot(conn, cfg)
@@ -223,6 +235,10 @@ func newServer(cfg *Config, log *Logger, labelled bool) (*server, error) {
 		return nil, fmt.Errorf("unexpected listener address %s", listener.Addr())
 	}
 	host := addr.IP.String()
+	if addr.Zone != "" {
+		// A link-local address is unroutable without its zone.
+		host += "%" + addr.Zone
+	}
 	if addr.IP.IsUnspecified() {
 		host = "127.0.0.1"
 	}

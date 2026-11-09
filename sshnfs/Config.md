@@ -391,7 +391,9 @@ separated, outermost first, each `[user@]host[:port]`:
   `connect_timeout`.
 - **`"none"`:** cancels a `ProxyJump` inherited from `~/.ssh/config` or from
   the top level of the file.
-- **Precedence:** if both are set, `proxy_jump` wins over `proxy_command`.
+- **Precedence:** if both are set explicitly, `proxy_jump` wins over
+  `proxy_command`. An explicit `proxy_command` does keep a `ProxyJump` from
+  `~/.ssh/config` from applying.
 - **Effect:** no external `ssh` process and no local port forwarding are
   involved. Reconnection rebuilds the whole chain.
 
@@ -796,8 +798,9 @@ One of `panic`, `fatal`, `error`, `warn`, `info`, `debug`, `trace`.
 - `debug` adds key selection, dial steps, skipped config and retries that were
   reconciled.
 - `trace` adds every NFS request (very verbose).
-- **Process-wide:** the top-level value applies to the whole process. A
-  `log_level` inside a `mounts` entry has no effect.
+- **Per mount:** a `log_level` inside a `mounts` entry applies to that mount's
+  own messages. The NFS library's messages, and sshnfs's few process-wide
+  ones, use the most verbose level any mount asks for.
 - **Effect:** logging never blocks. If stderr stops accepting output, lines are
   dropped and counted instead of stalling the program.
 

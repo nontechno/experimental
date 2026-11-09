@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -115,14 +114,15 @@ func withTimeout(conn io.Closer, d time.Duration, fn func() error) error {
 	if d <= 0 {
 		return fn()
 	}
-	var fired atomic.Bool
-	t := time.AfterFunc(d, func() {
-		fired.Store(true)
-		conn.Close()
-	})
-	defer t.Stop()
+	t := time.AfterFunc(d, func() { conn.Close() })
 	err := fn()
-	if err != nil && fired.Load() {
+	// Stop fails once the timer has fired, and then conn is closed (or about
+	// to be) even if fn got its answer just in time. Reporting success then
+	// would hand back a session whose transport is already gone.
+	if !t.Stop() {
+		if err == nil {
+			return fmt.Errorf("timed out after %s", d)
+		}
 		return fmt.Errorf("timed out after %s: %w", d, err)
 	}
 	return err

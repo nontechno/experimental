@@ -211,7 +211,12 @@ func (c *Config) applySSHConfig() error {
 		}
 	}
 
-	if !c.isExplicit("proxy_jump") {
+	// An explicit proxy_command is a statement of how to reach the host,
+	// so ssh config's ProxyJump must not override it (validate drops the
+	// command whenever there are jump hops). "none" says only "no command",
+	// and leaves ssh config free to supply a jump.
+	explicitCommand := c.isExplicit("proxy_command") && c.ProxyCommand != "" && !isNone(c.ProxyCommand)
+	if !c.isExplicit("proxy_jump") && !explicitCommand {
 		if v := set.get(alias, "ProxyJump"); v != "" {
 			c.ProxyJump = v
 		}

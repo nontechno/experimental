@@ -9,7 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -272,10 +272,19 @@ func (c *Conn) scheduleReconnect() {
 // ceiling. It exists so an idle mount comes back on its own rather than
 // waiting for a request to notice the link is gone.
 func (c *Conn) reconnectLoop() {
+	// rearm is set when the loop stops because the link is back. A drop
+	// between that moment and clearing the flag below found reconnecting
+	// still set and did not start a loop of its own, so check once more:
+	// otherwise an idle mount would stay down until a request came along.
+	// A loop that gave up (reconnect_max_attempts) does not rearm.
+	rearm := false
 	defer func() {
 		c.mu.Lock()
 		c.reconnecting = false
 		c.mu.Unlock()
+		if rearm {
+			c.scheduleReconnect()
+		}
 	}()
 
 	delay := c.cfg.ReconnectDelay.D()
@@ -297,12 +306,14 @@ func (c *Conn) reconnectLoop() {
 		case <-time.After(delay):
 		}
 		if _, _, ok := c.current(); ok {
+			rearm = true
 			return // a request got there first
 		}
 		if c.isClosed() {
 			return
 		}
 		if _, _, err := c.connect(true); err == nil {
+			rearm = true
 			return
 		} else {
 			c.log.Warnf("reconnect attempt %d failed: %v", attempt, err)
@@ -413,6 +424,9 @@ func (c *Conn) dial() (*ssh.Client, *sftp.Client, []io.Closer, *activity, error)
 		return e
 	})
 	if err != nil {
+		if sftpClient != nil {
+			go sftpClient.Close() // built just as the timer fired; Close may wait
+		}
 		sshClient.Close()
 		abort.Close()
 		return nil, nil, nil, nil, fmt.Errorf("start sftp subsystem: %w", err)
@@ -522,6 +536,9 @@ func (c *Conn) dialThroughJumps(target *endpoint) (net.Conn, []io.Closer, error)
 				return e
 			})
 			if err != nil {
+				if nc != nil {
+					nc.Close() // opened just as the timer fired
+				}
 				return fail(fmt.Errorf("jump host %s via %s: %w", hop.Addr(), c.cfg.jumpHops[i-1].Addr(), err))
 			}
 		}
@@ -547,6 +564,9 @@ func (c *Conn) dialThroughJumps(target *endpoint) (net.Conn, []io.Closer, error)
 		return e
 	})
 	if err != nil {
+		if conn != nil {
+			conn.Close() // opened just as the timer fired
+		}
 		return fail(fmt.Errorf("connect to %s from jump host %s: %w", target.Addr(), lastHop.Addr(), err))
 	}
 	// The jump clients must stay up for as long as the session does.
@@ -578,6 +598,9 @@ func (c *Conn) handshake(nc net.Conn, abort io.Closer, e *endpoint, timeout time
 		return nil
 	})
 	if err != nil {
+		if client != nil {
+			client.Close() // finished just as the timer fired
+		}
 		return nil, fmt.Errorf("ssh handshake %s: %w", e.Addr(), err)
 	}
 	return client, nil
@@ -909,21 +932,45 @@ func isConnError(err error) bool {
 		errors.Is(err, net.ErrClosed) ||
 		errors.Is(err, syscall.EPIPE) ||
 		errors.Is(err, syscall.ECONNRESET) ||
-		errors.Is(err, sftp.ErrSSHFxConnectionLost) {
+		errors.Is(err, sftp.ErrSSHFxConnectionLost) ||
+		errors.Is(err, sftp.ErrSSHFxNoConnection) {
 		return true
 	}
-	msg := err.Error()
-	for _, s := range []string{
-		"connection lost",
-		"use of closed network connection",
-		"broken pipe",
-		"connection reset by peer",
-		"session closed",
-		"EOF",
-	} {
-		if strings.Contains(msg, s) {
-			return true
+	// A status from the server is an answer: the session is alive, however
+	// the request itself went. A timeout is not a lost connection either:
+	// bounded has already dropped the session, and the operation must not
+	// be retried (its message carries the path, which the text check below
+	// must not see).
+	var se *sftp.StatusError
+	var te *opTimeoutError
+	if errors.As(err, &se) || errors.As(err, &te) {
+		return false
+	}
+	return connErrorInText(err)
+}
+
+// connErrorInText is the last resort, for layers that format rather than
+// wrap. Only the innermost errors are read, every branch of a joined error
+// included: the outer ones (*os.PathError and the like) carry the file
+// name, and "remove /srv/GEOFF.txt: file does not exist" must not read as a
+// dead connection.
+func connErrorInText(err error) bool {
+	switch u := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, e := range u.Unwrap() {
+			if e != nil && connErrorInText(e) {
+				return true
+			}
+		}
+		return false
+	case interface{ Unwrap() error }:
+		if inner := u.Unwrap(); inner != nil {
+			return connErrorInText(inner)
 		}
 	}
-	return false
+	return connErrorText.MatchString(err.Error())
 }
+
+// connErrorText matches what a lost connection looks like in an error that
+// was formatted rather than wrapped. EOF must be a whole word.
+var connErrorText = regexp.MustCompile(`\bEOF\b|connection lost|use of closed network connection|broken pipe|connection reset by peer|session closed`)

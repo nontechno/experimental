@@ -149,9 +149,10 @@ final command), and its stderr is surfaced in the log — that output is usually
 only clue when a jump fails. Note that this means a config file can execute an
 arbitrary shell command, exactly as ssh's own does.
 
-If both are set, `ProxyJump` wins and `proxy_command` is dropped. Either may be
-`"none"` to switch off a value inherited from the enclosing config or from
-`~/.ssh/config`.
+If both are set, `ProxyJump` wins and `proxy_command` is dropped; an explicit
+`proxy_command` does keep a `ProxyJump` from `~/.ssh/config` from applying.
+Either may be `"none"` to switch off a value inherited from the enclosing
+config or from `~/.ssh/config`.
 
 Reconnection rebuilds the entire chain, and the jump connections are torn down
 with the session rather than leaking.
@@ -396,9 +397,21 @@ uid the client sends.
   reached the remote server, but nothing calls `fsync` there: a crash of the
   remote *host* can lose writes the client was told were stable.
 - **Rename replaces the destination**, as NFS requires. `posix-rename@openssh.com`
-  does this atomically. If the server lacks that extension the code falls back
-  to a plain rename, and only removes an existing destination when the rename
-  is refused — never on some other error.
+  does this atomically. If the server lacks that extension, an existing
+  destination is first parked under a short hidden name in the same directory
+  (`.sshnfs-` and 12 hex digits), then the rename is made, then the old file
+  is removed. If the rename fails, the destination is put back, so a failed
+  rename never costs it. If the connection drops or times out part way, the
+  rename is not redone: on a new session the parked file is put back if its
+  old name is still free. If the name is taken, sshnfs cannot be sure whose
+  file it is, so it never deletes the parked file. It leaves it in place and
+  logs its name, as it does if it cannot check at all. The first rename on such
+  a server logs a warning. It is not atomic: another client can briefly see
+  the name missing. As in POSIX, a directory replaces only an empty directory,
+  a file only a non-directory, and renaming a name to itself changes nothing.
+  SFTP cannot tell that two names are hard links to the same file, which
+  POSIX would treat as a no-op; here the source is renamed and the
+  destination's old link removed.
 - **Symlink targets are returned verbatim**, like a kernel NFS server. An
   absolute target that points inside the export still resolves against the
   client's root, not the mount point — there is no rewriting that would fix

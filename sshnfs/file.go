@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -209,8 +210,8 @@ func closeLater(es []*openFile) {
 	}()
 }
 
-// drop forgets any pooled handles for a path, e.g. after it was removed,
-// renamed or truncated behind our back.
+// drop forgets any pooled handles for a path, e.g. after it was removed or
+// renamed.
 func (c *fileCache) drop(remotePath string) {
 	c.mu.Lock()
 	var toClose []*openFile
@@ -228,6 +229,49 @@ func (c *fileCache) drop(remotePath string) {
 	// Synchronous, so a rename or remove that follows does not race the
 	// close on servers that refuse to touch open files.
 	c.closeHandles(toClose)
+}
+
+// dropTree is drop for paths and everything under them, for the rename of a
+// directory. A handle for "dir/f" kept after "dir" was renamed refers to the
+// moved file, and must not be handed out again for whatever "dir/f" is now.
+func (c *fileCache) dropTree(roots ...string) {
+	c.mu.Lock()
+	var toClose []*openFile
+	for key, e := range c.entries {
+		if !underAny(e.path, roots) {
+			continue
+		}
+		delete(c.entries, key)
+		e.dead = true
+		if e.refs == 0 {
+			toClose = append(toClose, e)
+		}
+	}
+	c.mu.Unlock()
+	// Synchronous, so a rename or remove that follows does not race the
+	// close on servers that refuse to touch open files.
+	c.closeHandles(toClose)
+}
+
+// underPath reports whether p is root or lies below it.
+func underPath(p, root string) bool {
+	if p == root {
+		return true
+	}
+	if root == "/" {
+		return strings.HasPrefix(p, "/")
+	}
+	return strings.HasPrefix(p, root+"/")
+}
+
+// underAny reports whether p is one of roots or lies below one.
+func underAny(p string, roots []string) bool {
+	for _, r := range roots {
+		if underPath(p, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // dropAll invalidates every pooled handle, used after the SSH session died
@@ -489,9 +533,7 @@ func (f *File) releaseLocked() error {
 // file fails with os.ErrClosed, and Close is a no-op. f.mu must be held.
 func (f *File) failedLocked(err error) {
 	if isConnError(err) {
-		f.fs.conn.Invalidate(f.entry.gen)
-		f.fs.files.dropAll()
-		f.fs.attrs.clear()
+		f.fs.retire(f.entry.gen)
 	}
 	f.releaseLocked()
 }
