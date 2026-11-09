@@ -34,6 +34,23 @@ type FS struct {
 
 	// noPosixRename warns, once, that renames are not atomic.
 	noPosixRename *sync.Once
+	// unsettled holds the interrupted renames whose parked destination could
+	// not be checked on yet; each reconnect tries them again.
+	unsettled *settleQueue
+}
+
+// settleQueue is the set of interrupted replacing renames still to check
+// on, keyed by the parking name: queued, or being checked right now.
+type settleQueue struct {
+	mu     sync.Mutex
+	jobs   map[string]*settleJob
+	closed bool
+}
+
+type settleJob struct {
+	from, to string
+	tries    int
+	running  bool
 }
 
 var (
@@ -55,16 +72,28 @@ func NewFS(cfg *Config, conn *Conn, log *Logger, root string) *FS {
 		statvfs:  &statvfsCache{},
 
 		noPosixRename: &sync.Once{},
+		unsettled:     &settleQueue{jobs: make(map[string]*settleJob)},
 	}
 	conn.SetOnReconnect(func() {
 		f.files.dropAll()
 		f.attrs.clear()
+		go f.settlePending()
 	})
 	return f
 }
 
 func (f *FS) Close() {
 	f.files.Close()
+	q := f.unsettled
+	q.mu.Lock()
+	jobs := q.jobs
+	q.jobs = make(map[string]*settleJob)
+	q.closed = true
+	q.mu.Unlock()
+	for aside, j := range jobs {
+		f.log.Errorf("a rename of %s to %s was cut off and not settled before exit: the original %s may be left as %s, move it back by hand",
+			j.from, j.to, j.to, aside)
+	}
 }
 
 func normalizeRoot(root string) string {
@@ -389,12 +418,12 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	f.forget(tree, from, to)
 	defer f.forget(tree, from, to)
 
-	// parked is set while the fallback may have the destination moved aside.
-	// Atomic, because after a timeout the attempt can still be running.
-	var parked atomic.Bool
+	// state tracks the fallback's steps. Atomic, because after a timeout the
+	// attempt can still be running.
+	var state atomic.Int32
 	aside := asideName(to)
 	err := f.doRetry("rename "+from+" to "+to, func(c *sftp.Client) error {
-		if parked.Load() {
+		if state.Load() == renameParked {
 			// The attempt that moved the destination aside lost its session.
 			// Nothing is redone on top of that; settleAside sorts it out.
 			return errRenameInterrupted
@@ -410,7 +439,7 @@ func (f *FS) Rename(oldpath, newpath string) error {
 		f.noPosixRename.Do(func() {
 			f.log.Warnf("the server lacks posix-rename@openssh.com: a rename onto an existing name is done in steps, and is not atomic")
 		})
-		return f.renameReplacing(c, from, to, aside, &parked)
+		return f.renameReplacing(c, from, to, aside, &state)
 	}, func(c *sftp.Client, err error) error {
 		// The source is gone and the destination exists: the rename the
 		// lost reply belonged to went through.
@@ -422,7 +451,8 @@ func (f *FS) Rename(oldpath, newpath string) error {
 		}
 		return nil
 	})
-	if parked.Load() {
+	switch state.Load() {
+	case renameParked:
 		// An attempt was cut off with the destination possibly moved aside.
 		var te *opTimeoutError
 		if errors.As(err, &te) {
@@ -431,6 +461,11 @@ func (f *FS) Rename(oldpath, newpath string) error {
 		} else {
 			f.settleAside(from, to, aside)
 		}
+	case renameReplacedFile, renameReplacedDir:
+		// Done. Deleting the replaced file is cleanup, and cannot turn the
+		// reply into an error; it is still finished before the reply, so
+		// that no client sees the parked name afterwards.
+		f.removeReplaced(from, to, aside, state.Load() == renameReplacedDir)
 	}
 	if errors.Is(err, errRenameInterrupted) {
 		err = &os.PathError{Op: "rename", Path: from, Err: syscall.EIO}
@@ -444,6 +479,14 @@ func (f *FS) Rename(oldpath, newpath string) error {
 func asideName(to string) string {
 	return path.Join(path.Dir(to), ".sshnfs-"+randomSuffix(6))
 }
+
+// The steps of a replacing rename, as renameReplacing records them.
+const (
+	renameUntouched    int32 = iota // the destination is where it was
+	renameParked                    // the destination may be moved aside
+	renameReplacedFile              // done; aside holds the replaced file
+	renameReplacedDir               // done; aside holds the replaced empty directory
+)
 
 var errRenameInterrupted = errors.New("rename interrupted by a lost connection")
 
@@ -520,15 +563,17 @@ func (s symlinkInfo) Sys() interface{}   { return nil }
 // source directory without write permission) cannot cost the caller the
 // destination: on failure it is put back.
 //
-// parked is set from just before the destination is moved aside until it
-// is known to be back or replaced. A connection error in between returns
-// with parked still set, and Rename then calls settleAside.
+// state is renameParked from just before the destination is moved aside
+// until it is known to be back (renameUntouched) or replaced
+// (renameReplacedFile or renameReplacedDir, and Rename then deletes aside). A connection error in
+// between returns with it still renameParked, and Rename then calls
+// settleAside.
 //
 // The steps are not atomic: another client can briefly see the name
 // missing. Nor can SFTP tell that the two names are hard links to one file,
 // which POSIX would treat as a no-op; here the source name is renamed and
 // the destination's old link removed.
-func (f *FS) renameReplacing(c *sftp.Client, from, to, aside string, parked *atomic.Bool) error {
+func (f *FS) renameReplacing(c *sftp.Client, from, to, aside string, state *atomic.Int32) error {
 	if from == to {
 		// POSIX: renaming a name to itself changes nothing.
 		_, err := c.Lstat(from)
@@ -569,12 +614,12 @@ func (f *FS) renameReplacing(c *sftp.Client, from, to, aside string, parked *ato
 		}
 	}
 
-	parked.Store(true)
+	state.Store(renameParked)
 	if err := c.Rename(to, aside); err != nil {
 		if isConnError(err) {
 			return err
 		}
-		parked.Store(false)
+		state.Store(renameUntouched)
 		return first
 	}
 	if err := c.Rename(from, to); err != nil {
@@ -588,57 +633,147 @@ func (f *FS) renameReplacing(c *sftp.Client, from, to, aside string, parked *ato
 			f.log.Errorf("rename %s to %s failed (%v), and putting the original %s back failed too (%v): it is now %s",
 				from, to, err, to, rerr, aside)
 		}
-		parked.Store(false)
+		state.Store(renameUntouched)
 		return err
 	}
 	// The rename is done, so aside is certainly the replaced destination.
-	parked.Store(false)
 	if dst.IsDir() {
-		err = c.RemoveDirectory(aside)
+		state.Store(renameReplacedDir)
 	} else {
-		err = c.Remove(aside)
+		state.Store(renameReplacedFile)
+	}
+	return nil
+}
+
+// removeReplaced deletes the destination a replacing rename moved aside,
+// once the rename is done. It is a step of its own, with its own time
+// limit, so that if it stalls or fails the rename still counts as done;
+// the log says what is left behind.
+func (f *FS) removeReplaced(from, to, aside string, isDir bool) {
+	c, gen, err := f.conn.Client()
+	if err == nil {
+		err = f.conn.bounded(gen, "remove "+aside+", replaced by renaming "+from, func() error {
+			if isDir {
+				return c.RemoveDirectory(aside)
+			}
+			return c.Remove(aside)
+		})
+		f.forget(false, aside)
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		f.log.Warnf("renamed %s to %s, but the replaced %s could not be removed and is left as %s: %v",
 			from, to, to, aside, err)
 	}
-	return nil
 }
 
-// settleAside runs on a fresh session after a replacing rename was cut off
-// with the destination possibly moved aside. With the destination name
-// empty the rename cannot have happened, so the original is put back; plain
-// SFTP rename never replaces, so that cannot clobber a file another client
-// made meanwhile. With the name taken it is not certain whose file that is,
-// so the original is never deleted: it is left in place, and the log says
-// where.
+// maxSettleTries bounds how often an interrupted rename is checked on
+// before sshnfs gives up and asks for the parked file to be moved by hand.
+const maxSettleTries = 3
+
+// settleAside checks on a replacing rename that was cut off with the
+// destination possibly moved aside, now if a session can be had, and is
+// tried again after reconnects, up to maxSettleTries in all.
 func (f *FS) settleAside(from, to, aside string) {
+	j := &settleJob{from: from, to: to, running: true}
+	f.unsettled.mu.Lock()
+	f.unsettled.jobs[aside] = j
+	f.unsettled.mu.Unlock()
+	f.runSettle(aside, j)
+}
+
+// settlePending runs the queued checks again, after a reconnect. Ones
+// already running are left to their runner.
+func (f *FS) settlePending() {
+	type item struct {
+		aside string
+		j     *settleJob
+	}
+	var todo []item
+	f.unsettled.mu.Lock()
+	for aside, j := range f.unsettled.jobs {
+		if !j.running {
+			j.running = true
+			todo = append(todo, item{aside, j})
+		}
+	}
+	f.unsettled.mu.Unlock()
+	for _, it := range todo {
+		f.runSettle(it.aside, it.j)
+	}
+}
+
+// runSettle makes one check of job j and then updates the queue: done,
+// queued for the next reconnect, or given up on with an error in the log.
+// Only a failure to reach the server is tried again. A check that timed
+// out is not: its timeout dropped the session, and running it again on the
+// reconnect that follows would drop that one too, and so on.
+func (f *FS) runSettle(aside string, j *settleJob) {
+	err, retry := f.checkAside(j.from, j.to, aside)
+	q := f.unsettled
+	q.mu.Lock()
+	if q.jobs[aside] != j {
+		q.mu.Unlock()
+		return // given up on at shutdown, and logged there
+	}
+	j.running = false
+	j.tries++
+	switch {
+	case err == nil:
+		delete(q.jobs, aside)
+	case retry && j.tries < maxSettleTries && !q.closed:
+	default:
+		delete(q.jobs, aside)
+		retry = false
+	}
+	q.mu.Unlock()
+	switch {
+	case err == nil:
+	case retry:
+		f.log.Warnf("a rename of %s to %s was cut off, and checking on it failed (%v): the original %s may be left as %s; trying again after the next reconnect",
+			j.from, j.to, err, j.to, aside)
+	default:
+		f.log.Errorf("a rename of %s to %s was cut off, and checking on it failed (%v): the original %s may be left as %s, move it back by hand",
+			j.from, j.to, err, j.to, aside)
+	}
+}
+
+// checkAside is one check on an interrupted replacing rename. With the
+// destination name empty the rename cannot have happened, so the original
+// is put back; plain SFTP rename never replaces, so that cannot clobber a
+// file another client made meanwhile. With the name taken it is not certain
+// whose file that is, so the original is never deleted: it is left in
+// place, and the log says where. retry reports a failure that a new
+// session may cure.
+func (f *FS) checkAside(from, to, aside string) (err error, retry bool) {
 	c, gen, err := f.conn.Client()
-	if err == nil {
-		err = f.conn.bounded(gen, "settle rename "+from+" to "+to, func() error {
-			if _, err := lookupEntry(c, aside); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					return nil // never moved, or already back or removed
-				}
-				return err
-			}
-			_, err := lookupEntry(c, to)
-			switch {
-			case err == nil:
-				f.log.Warnf("a rename of %s to %s was cut off; %s exists now, and the file it replaced is left as %s: delete it if it is not needed",
-					from, to, to, aside)
-				return nil
-			case errors.Is(err, os.ErrNotExist):
-				return c.Rename(aside, to)
+	if err != nil {
+		return err, !errors.Is(err, errConnClosed)
+	}
+	err = f.conn.bounded(gen, "settle rename "+from+" to "+to, func() error {
+		if _, err := lookupEntry(c, aside); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil // never moved, or already back or removed
 			}
 			return err
-		})
-		f.forget(false, to, aside)
+		}
+		_, err := lookupEntry(c, to)
+		switch {
+		case err == nil:
+			f.log.Warnf("a rename of %s to %s was cut off; %s exists now, and the file it replaced is left as %s: delete it if it is not needed",
+				from, to, to, aside)
+			return nil
+		case errors.Is(err, os.ErrNotExist):
+			return c.Rename(aside, to)
+		}
+		return err
+	})
+	f.forget(false, to, aside)
+	if isConnError(err) {
+		// Make sure a reconnect, and with it the next try, happens.
+		f.retire(gen)
+		return err, true
 	}
-	if err != nil {
-		f.log.Errorf("a rename of %s to %s was cut off, and checking on it failed (%v): the original %s may be left as %s, move it back by hand",
-			from, to, err, to, aside)
-	}
+	return err, false
 }
 
 func (f *FS) Remove(name string) error {

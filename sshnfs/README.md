@@ -405,7 +405,12 @@ uid the client sends.
   rename is not redone: on a new session the parked file is put back if its
   old name is still free. If the name is taken, sshnfs cannot be sure whose
   file it is, so it never deletes the parked file. It leaves it in place and
-  logs its name, as it does if it cannot check at all. The first rename on such
+  logs its name. If the server cannot be reached to check, the check is tried
+  again after reconnects, three times in all; a check that times out is not
+  retried. When sshnfs gives up, and for any check still pending at exit, the
+  log names the parked file. Deleting the old file is a separate step before
+  the reply, so a slow or failed delete never turns a done rename into an
+  error; it only logs the leftover name. The first rename on such
   a server logs a warning. It is not atomic: another client can briefly see
   the name missing. As in POSIX, a directory replaces only an empty directory,
   a file only a non-directory, and renaming a name to itself changes nothing.

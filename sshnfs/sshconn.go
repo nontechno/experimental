@@ -937,13 +937,18 @@ func isConnError(err error) bool {
 		return true
 	}
 	// A status from the server is an answer: the session is alive, however
-	// the request itself went. A timeout is not a lost connection either:
-	// bounded has already dropped the session, and the operation must not
-	// be retried (its message carries the path, which the text check below
-	// must not see).
+	// the request itself went, unless the status itself says otherwise (a
+	// gateway can relay the loss of its own backend that way). A timeout is
+	// not a lost connection either: bounded has already dropped the
+	// session, and the operation must not be retried (its message carries
+	// the path, which the text check below must not see).
 	var se *sftp.StatusError
+	if errors.As(err, &se) {
+		code := se.FxCode()
+		return code == sftp.ErrSSHFxConnectionLost || code == sftp.ErrSSHFxNoConnection
+	}
 	var te *opTimeoutError
-	if errors.As(err, &se) || errors.As(err, &te) {
+	if errors.As(err, &te) {
 		return false
 	}
 	return connErrorInText(err)

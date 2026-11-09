@@ -736,15 +736,22 @@ func TestIsConnErrorTimeoutsAndJoins(t *testing.T) {
 	}
 }
 
-// replace runs the fallback once, with a fresh parking name, and checks
-// that it never returns with the destination still marked as parked unless
-// the connection failed.
+// replace runs the fallback once, with a fresh parking name, and the
+// cleanup Rename would start after it. It checks that the fallback never
+// returns with the destination still marked as parked unless the connection
+// failed, and marks it replaced only when it succeeds.
 func replace(t *testing.T, fsys *FS, c *sftp.Client, from, to string) error {
 	t.Helper()
-	var parked atomic.Bool
-	err := fsys.renameReplacing(c, from, to, asideName(to), &parked)
-	if parked.Load() && !isConnError(err) {
+	var state atomic.Int32
+	aside := asideName(to)
+	err := fsys.renameReplacing(c, from, to, aside, &state)
+	switch st := state.Load(); {
+	case st == renameParked && !isConnError(err):
 		t.Errorf("rename %s to %s: returned %v with the destination still marked as parked", from, to, err)
+	case st >= renameReplacedFile && err != nil:
+		t.Errorf("rename %s to %s: returned %v but marked the destination replaced", from, to, err)
+	case st >= renameReplacedFile:
+		fsys.removeReplaced(from, to, aside, st == renameReplacedDir)
 	}
 	return err
 }
@@ -896,5 +903,119 @@ func TestKnownRegular(t *testing.T) {
 	}
 	if fi, err := fsys.Lstat("/link"); err == nil && fi.Mode()&os.ModeSymlink != 0 && fsys.knownRegular("/link") {
 		t.Fatal("a symlink was judged a regular file")
+	}
+}
+
+func queued(fsys *FS) int {
+	fsys.unsettled.mu.Lock()
+	defer fsys.unsettled.mu.Unlock()
+	return len(fsys.unsettled.jobs)
+}
+
+// A check that cannot reach the server is queued, and the reconnect hook
+// runs the queue; after maxSettleTries failures it is given up on.
+func TestSettleIsRetriedAfterReconnect(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := l.Addr().String()
+	l.Close()
+	cfg := stallConfig(t, dead)
+	cfg.ConnectTimeout = Duration(time.Second)
+	log := NewLogger(LevelPanic)
+	conn := NewConn(cfg, log)
+	defer conn.Close()
+	down := NewFS(cfg, conn, log, "/")
+	defer down.Close()
+	down.settleAside("/src", "/keep", "/.sshnfs-0123456789ab")
+	if n := queued(down); n != 1 {
+		t.Fatalf("%d checks queued after an unreachable server, want 1", n)
+	}
+	for i := 1; i < maxSettleTries; i++ {
+		time.Sleep(dialBackoff) // let the dial be tried again
+		down.settlePending()
+	}
+	if n := queued(down); n != 0 {
+		t.Fatalf("%d checks still queued after %d failures", n, maxSettleTries)
+	}
+
+	// A real reconnect runs the queue through the hook.
+	fsys, _ := sftpFixture(t)
+	fsys.unsettled.mu.Lock()
+	fsys.unsettled.jobs["/.sshnfs-0123456789ab"] = &settleJob{from: "/src", to: "/keep"}
+	fsys.unsettled.mu.Unlock()
+	_, gen, err := fsys.conn.Client()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys.conn.Invalidate(gen)
+	if _, _, err := fsys.conn.Client(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for queued(fsys) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the reconnect did not run the queued check")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A check that times out is not queued again: its timeout dropped the
+// session, and rerunning it on every reconnect would keep dropping it.
+func TestTimedOutSettleIsNotRetried(t *testing.T) {
+	fsys, _ := sftpFixture(t)
+	start := time.Now()
+	fsys.settleAside("/src", "/stuck/x", "/stuck/.sshnfs-0123456789ab")
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("the check took %s", time.Since(start))
+	}
+	if n := queued(fsys); n != 0 {
+		t.Fatalf("a timed-out check was queued again (%d queued)", n)
+	}
+}
+
+// Shutdown gives up on what is still queued, and a check still running
+// then does not queue itself again.
+func TestCloseDrainsSettleQueue(t *testing.T) {
+	fsys, _ := sftpFixture(t)
+	fsys.unsettled.mu.Lock()
+	fsys.unsettled.jobs["/.sshnfs-0123456789ab"] = &settleJob{from: "/src", to: "/keep"}
+	fsys.unsettled.mu.Unlock()
+	fsys.Close()
+	if n := queued(fsys); n != 0 {
+		t.Fatalf("%d checks still queued after Close", n)
+	}
+	fsys.settleAside("/src", "/keep", "/.sshnfs-ba9876543210")
+	if n := queued(fsys); n != 0 {
+		t.Fatalf("%d checks queued after Close", n)
+	}
+}
+
+// The replaced destination is deleted after the rename, a directory too.
+func TestRemoveReplacedDirectory(t *testing.T) {
+	fsys, c := sftpFixture(t)
+	if err := c.Mkdir("/src"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Mkdir("/dst"); err != nil {
+		t.Fatal(err)
+	}
+	if err := replace(t, fsys, c, "/src", "/dst"); err != nil {
+		t.Fatalf("directory onto an empty directory: %v", err)
+	}
+	if fi, err := c.Lstat("/dst"); err != nil || !fi.IsDir() || exists(t, c, "/src") {
+		t.Fatalf("after rename: /dst %v %v, /src there=%v", fi, err, exists(t, c, "/src"))
+	}
+	noLeftovers(t, c, "/")
+}
+
+// A status that relays a lost connection counts as one; others do not.
+func TestIsConnErrorStatusCodes(t *testing.T) {
+	for code, want := range map[uint32]bool{2: false, 4: false, 6: true, 7: true} {
+		if got := isConnError(&sftp.StatusError{Code: code}); got != want {
+			t.Errorf("status %d: isConnError = %v, want %v", code, got, want)
+		}
 	}
 }
