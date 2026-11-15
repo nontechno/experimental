@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nontechno/experimental/otel.sink/internal/model"
+	"nontechno.com/experimental/otel.sink/internal/model"
 )
 
 func TestJSONLIsOneObjectPerLine(t *testing.T) {

@@ -17,7 +17,7 @@ import (
 	"github.com/willscott/go-nfs-client/nfs/rpc"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/nontechno/experimental/etcd-nfs/etcdfs"
+	"nontechno.com/experimental/etcd-nfs/etcdfs"
 )
 
 // End-to-end tests speak the NFSv3 wire protocol to the server with

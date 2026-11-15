@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/nontechno/experimental/otel.sink/internal/model"
+	"nontechno.com/experimental/otel.sink/internal/model"
 )
 
 func TestChainAppliesInOrder(t *testing.T) {

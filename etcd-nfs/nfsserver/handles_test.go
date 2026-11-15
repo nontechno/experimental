@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-git/go-billy/v5"
 
-	"github.com/nontechno/experimental/etcd-nfs/etcdfs"
+	"nontechno.com/experimental/etcd-nfs/etcdfs"
 
 	nfsc "github.com/willscott/go-nfs-client/nfs"
 	"github.com/willscott/go-nfs-client/nfs/rpc"

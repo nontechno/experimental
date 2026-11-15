@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nontechno/experimental/otel.sink/internal/config"
-	"github.com/nontechno/experimental/otel.sink/internal/model"
+	"nontechno.com/experimental/otel.sink/internal/config"
+	"nontechno.com/experimental/otel.sink/internal/model"
 )
 
 // Console prints records to a writer. The mutex keeps records from

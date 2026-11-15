@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nontechno/experimental/otel.sink/internal/model"
+	"nontechno.com/experimental/otel.sink/internal/model"
 )
 
 // Store implements sink.Sink and answers queries.

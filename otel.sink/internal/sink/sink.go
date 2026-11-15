@@ -20,8 +20,8 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 
-	"github.com/nontechno/experimental/otel.sink/internal/filter"
-	"github.com/nontechno/experimental/otel.sink/internal/model"
+	"nontechno.com/experimental/otel.sink/internal/filter"
+	"nontechno.com/experimental/otel.sink/internal/model"
 )
 
 // Sink is one output: the console, a file, a socket, the in-memory store.

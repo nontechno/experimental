@@ -1,4 +1,4 @@
-module github.com/nontechno/experimental/etcd-nfs
+module nontechno.com/experimental/etcd-nfs
 
 go 1.24.0
 

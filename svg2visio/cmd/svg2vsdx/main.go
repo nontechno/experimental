@@ -18,9 +18,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nontechno/experimental/svg2visio/internal/scene"
-	"github.com/nontechno/experimental/svg2visio/internal/svgdoc"
-	"github.com/nontechno/experimental/svg2visio/internal/vsdx"
+	"nontechno.com/experimental/svg2visio/internal/scene"
+	"nontechno.com/experimental/svg2visio/internal/svgdoc"
+	"nontechno.com/experimental/svg2visio/internal/vsdx"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nontechno/experimental/otel.sink/internal/model"
+	"nontechno.com/experimental/otel.sink/internal/model"
 )
 
 func TestRingOverwritesOldest(t *testing.T) {

@@ -18,13 +18,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nontechno/experimental/otel.sink/internal/api"
-	"github.com/nontechno/experimental/otel.sink/internal/config"
-	"github.com/nontechno/experimental/otel.sink/internal/filter"
-	"github.com/nontechno/experimental/otel.sink/internal/forwarder"
-	"github.com/nontechno/experimental/otel.sink/internal/receiver"
-	"github.com/nontechno/experimental/otel.sink/internal/sink"
-	"github.com/nontechno/experimental/otel.sink/internal/store"
+	"nontechno.com/experimental/otel.sink/internal/api"
+	"nontechno.com/experimental/otel.sink/internal/config"
+	"nontechno.com/experimental/otel.sink/internal/filter"
+	"nontechno.com/experimental/otel.sink/internal/forwarder"
+	"nontechno.com/experimental/otel.sink/internal/receiver"
+	"nontechno.com/experimental/otel.sink/internal/sink"
+	"nontechno.com/experimental/otel.sink/internal/store"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nontechno/experimental/otel.sink/internal/model"
-	"github.com/nontechno/experimental/otel.sink/internal/store"
+	"nontechno.com/experimental/otel.sink/internal/model"
+	"nontechno.com/experimental/otel.sink/internal/store"
 )
 
 //go:embed ui.html

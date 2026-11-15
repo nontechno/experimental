@@ -1,3 +1,3 @@
-module github.com/nontechno/experimental/oci.imds
+module nontechno.com/experimental/oci.imds
 
 go 1.24.7

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nontechno/experimental/svg2visio/internal/svgdoc"
+	"nontechno.com/experimental/svg2visio/internal/svgdoc"
 )
 
 // geom is a drawable primitive extracted from an element.

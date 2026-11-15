@@ -19,7 +19,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nontechno/experimental/otel.sink/internal/model"
+	"nontechno.com/experimental/otel.sink/internal/model"
 )
 
 // Filter transforms a batch of records. Returning a shorter slice drops

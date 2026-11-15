@@ -3,7 +3,7 @@ package scene
 import (
 	"fmt"
 
-	"github.com/nontechno/experimental/svg2visio/internal/svgdoc"
+	"nontechno.com/experimental/svg2visio/internal/svgdoc"
 )
 
 // fromGeneric maps arbitrary SVG: closed filled primitives become shapes,

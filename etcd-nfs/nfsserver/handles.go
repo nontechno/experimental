@@ -6,7 +6,7 @@ import (
 	"github.com/go-git/go-billy/v5"
 	nfs "github.com/willscott/go-nfs"
 
-	"github.com/nontechno/experimental/etcd-nfs/etcdfs"
+	"nontechno.com/experimental/etcd-nfs/etcdfs"
 )
 
 // File handle format.

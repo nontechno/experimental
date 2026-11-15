@@ -1,4 +1,4 @@
-module github.com/nontechno/experimental/otel.sink/examples/emitter
+module nontechno.com/experimental/otel.sink/examples/emitter
 
 go 1.25.0
 

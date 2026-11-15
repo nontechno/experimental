@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nontechno/experimental/svg2visio/internal/scene"
+	"nontechno.com/experimental/svg2visio/internal/scene"
 )
 
 // Options control the export.

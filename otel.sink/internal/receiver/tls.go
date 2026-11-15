@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/grpc/credentials"
 
-	"github.com/nontechno/experimental/otel.sink/internal/config"
+	"nontechno.com/experimental/otel.sink/internal/config"
 )
 
 // serverTLSConfig builds a TLS config from cert/key files, requiring client

@@ -14,8 +14,8 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 
-	"github.com/nontechno/experimental/otel.sink/internal/config"
-	"github.com/nontechno/experimental/otel.sink/internal/sink"
+	"nontechno.com/experimental/otel.sink/internal/config"
+	"nontechno.com/experimental/otel.sink/internal/sink"
 )
 
 const (

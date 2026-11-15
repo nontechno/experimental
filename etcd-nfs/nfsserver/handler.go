@@ -12,7 +12,7 @@ import (
 	nfs "github.com/willscott/go-nfs"
 	nfshelper "github.com/willscott/go-nfs/helpers"
 
-	"github.com/nontechno/experimental/etcd-nfs/etcdfs"
+	"nontechno.com/experimental/etcd-nfs/etcdfs"
 )
 
 // Options configures a Handler.

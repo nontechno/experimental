@@ -20,8 +20,8 @@ import (
 	"go.etcd.io/etcd/client/pkg/v3/transport"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/nontechno/experimental/etcd-nfs/etcdfs"
-	"github.com/nontechno/experimental/etcd-nfs/nfsserver"
+	"nontechno.com/experimental/etcd-nfs/etcdfs"
+	"nontechno.com/experimental/etcd-nfs/nfsserver"
 )
 
 func main() {

@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/nontechno/experimental/otel.sink/internal/config"
-	"github.com/nontechno/experimental/otel.sink/internal/sink"
+	"nontechno.com/experimental/otel.sink/internal/config"
+	"nontechno.com/experimental/otel.sink/internal/sink"
 )
 
 // GRPC serves the three OTLP export services on one port.

@@ -3,7 +3,7 @@
 package scene
 
 import (
-	"github.com/nontechno/experimental/svg2visio/internal/svgdoc"
+	"nontechno.com/experimental/svg2visio/internal/svgdoc"
 )
 
 type (

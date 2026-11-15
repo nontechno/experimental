@@ -3,7 +3,7 @@ package filter
 import (
 	"strings"
 
-	"github.com/nontechno/experimental/otel.sink/internal/model"
+	"nontechno.com/experimental/otel.sink/internal/model"
 )
 
 // This file is the place to put your own processing. Everything here is

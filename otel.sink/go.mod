@@ -1,4 +1,4 @@
-module github.com/nontechno/experimental/otel.sink
+module nontechno.com/experimental/otel.sink
 
 go 1.25.0
 

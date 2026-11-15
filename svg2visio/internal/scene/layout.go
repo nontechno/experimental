@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nontechno/experimental/svg2visio/internal/svgdoc"
+	"nontechno.com/experimental/svg2visio/internal/svgdoc"
 )
 
 const nbsp = " "
