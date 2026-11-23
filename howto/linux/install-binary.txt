@@ -1,0 +1,5 @@
+The "Text file busy" (ETXTBSY) error occurs when you try to overwrite 
+an executable binary or script that is currently running. In Unix/Linux, 
+"text" refers to a program's executable code segment in memory, not a plain .txt document.
+
+install -m 755 source_binary /path/to/destination_binary
